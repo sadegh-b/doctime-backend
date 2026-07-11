@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Databases
+doctime.db
+doctime.db.bak
+*.sqlite3
+
+# Pytest / caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Junk files
+-Method
+-Uri
