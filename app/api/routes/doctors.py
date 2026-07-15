@@ -1,4 +1,3 @@
-# app/api/routes/doctors.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
@@ -95,4 +94,25 @@ def list_doctors(db: Session = Depends(get_db)):
         "success": True,
         "count": len(items),
         "items": items,
+    }
+
+
+@router.get("/{doctor_id}", response_model=DoctorCreateResponse)
+def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
+    doctor = (
+        db.query(Doctor)
+        .options(joinedload(Doctor.user))
+        .filter(Doctor.id == doctor_id)
+        .first()
+    )
+
+    if not doctor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Doctor not found",
+        )
+
+    return {
+        "success": True,
+        "data": DoctorResponse.model_validate(doctor),
     }

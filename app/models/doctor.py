@@ -1,4 +1,3 @@
-# app/models/doctor.py
 from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +14,7 @@ class Doctor(Base):
         nullable=False,
     )
     specialty: Mapped[str] = mapped_column(String(120), nullable=False)
+    work_shift: Mapped[str] = mapped_column(String(20), nullable=False, default="morning")
     city: Mapped[str] = mapped_column(String(120), nullable=False)
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str | None] = mapped_column(String(1000), nullable=True)

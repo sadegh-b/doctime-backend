@@ -1,10 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.models
 from app.api.routes.appointments import router as appointments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
 from app.api.routes.doctors import router as doctors_router
+from app.api.routes.reviews import router as reviews_router
 
 app = FastAPI(
     title="DocTime API",
@@ -38,3 +40,4 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(doctors_router, prefix="/api/v1")
 app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(availability_router, prefix="/api/v1")
+app.include_router(reviews_router, prefix="/api/v1")

@@ -1,5 +1,6 @@
 # app/api/routes/availability.py
 from datetime import datetime, timedelta, time as dtime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,7 +21,6 @@ router = APIRouter(prefix="/availability", tags=["Availability"])
 
 def _time_to_dt(t: dtime) -> datetime:
     # We only need a dummy date to do time arithmetic reliably.
-    # "arithmetic" تلفظ: اَرِثمِتیک = محاسبات
     return datetime.combine(datetime(2000, 1, 1).date(), t)
 
 
@@ -47,27 +47,18 @@ def create_availability(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found")
 
+    # Generate candidate slots based on duration
+    candidate_slots = []
     start_dt = _time_to_dt(payload.start_time)
     end_dt = _time_to_dt(payload.end_time)
     duration = timedelta(minutes=payload.duration_minutes)
 
-    if start_dt + duration > end_dt:
-        raise HTTPException(
-            status_code=400,
-            detail="Time range is smaller than duration_minutes",
-        )
-
-    # Generate candidate slots
-    candidate_slots: list[tuple[dtime, dtime]] = []
     cursor = start_dt
     while cursor + duration <= end_dt:
-        s = cursor.time()
-        e = (cursor + duration).time()
-        candidate_slots.append((s, e))
+        candidate_slots.append((cursor.time(), (cursor + duration).time()))
         cursor += duration
 
-    # Overlap check: we must ensure none of the candidate slots collide with existing slots
-    # This is stricter than checking only the payload whole range.
+    # Overlap check
     existing = (
         db.query(Availability)
         .filter(
@@ -104,9 +95,8 @@ def create_availability(
 
         db.add_all(items)
         db.commit()
-
-        for it in items:
-            db.refresh(it)
+        for item in items:
+            db.refresh(item)
 
         return {
             "success": True,
@@ -116,3 +106,37 @@ def create_availability(
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create availability")
+
+
+@router.get("", status_code=status.HTTP_200_OK)
+def get_availability(
+    doctor_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all availability slots.
+    Optionally filter by doctor_id to get specific doctor's slots.
+    """
+    query = db.query(Availability)
+    
+    if doctor_id is not None:
+        query = query.filter(Availability.doctor_id == doctor_id)
+        
+    slots = query.order_by(Availability.date.asc(), Availability.start_time.asc()).all()
+    
+    return {
+        "success": True,
+        "count": len(slots),
+        "items": [
+            {
+                "id": slot.id,
+                "doctor_id": slot.doctor_id,
+                "date": slot.date.isoformat() if hasattr(slot.date, "isoformat") else str(slot.date),
+                "start_time": slot.start_time.isoformat() if hasattr(slot.start_time, "isoformat") else str(slot.start_time),
+                "end_time": slot.end_time.isoformat() if hasattr(slot.end_time, "isoformat") else str(slot.end_time),
+                "is_available": slot.is_available,
+                "is_booked": slot.is_booked
+            }
+            for slot in slots
+        ]
+    }
