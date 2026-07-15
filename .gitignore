@@ -33,3 +33,6 @@ Thumbs.db
 # Junk files
 -Method
 -Uri
+
+sql_app.db
+*.db
