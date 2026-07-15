@@ -36,3 +36,14 @@ Thumbs.db
 
 sql_app.db
 *.db
+
+# Local scripts and data
+check_schema.py
+check_tables.py
+create_mock_data.py
+create_test_appointment.py
+fix_db.py
+fix_doctor_email.py
+fix_doctor_specialty.py
+seed.py
+register-doctor.json
