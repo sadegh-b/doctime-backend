@@ -7,8 +7,9 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 
+# استفاده از bcrypt_sha256 برای تضمین سازگاری کامل با نسخه‌های جدید bcrypt در سرور Render
 pwd_context = CryptContext(
-    schemes=["bcrypt"],
+    schemes=["bcrypt_sha256"],
     deprecated="auto",
 )
 
