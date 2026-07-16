@@ -1,3 +1,5 @@
+from os import getenv
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,10 +16,28 @@ app = FastAPI(
     version="1.0.0",
 )
 
-allowed_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+
+def build_allowed_origins() -> list[str]:
+    origins = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+
+    frontend_url = getenv("FRONTEND_URL", "").strip()
+    if frontend_url:
+        origins.add(frontend_url)
+
+    extra_origins = getenv("ALLOWED_ORIGINS", "").strip()
+    if extra_origins:
+        for origin in extra_origins.split(","):
+            cleaned = origin.strip()
+            if cleaned:
+                origins.add(cleaned)
+
+    return sorted(origins)
+
+
+allowed_origins = build_allowed_origins()
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,6 +53,7 @@ def root():
     return {
         "status": "online",
         "message": "DocTime API is running successfully",
+        "allowed_origins": allowed_origins,
     }
 
 
