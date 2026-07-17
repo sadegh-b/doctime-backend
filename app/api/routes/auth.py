@@ -368,3 +368,73 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="خطای داخلی هنگام ثبت‌نام کاربر رخ داد.",
         )
+
+
+@router.post(
+    "/login",
+    response_model=AuthResponse,
+)
+def login_user(
+    user_data: UserLogin,
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.phone == user_data.phone)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="شماره موبایل یا رمز عبور اشتباه است.",
+        )
+
+    if not verify_password(
+        user_data.password,
+        user.hashed_password,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="شماره موبایل یا رمز عبور اشتباه است.",
+        )
+
+    doctor_profile = None
+
+    if user.role == "doctor":
+        doctor_profile = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == user.id)
+            .first()
+        )
+
+    access_token = create_access_token(
+        subject=user.id,
+        role=user.role,
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": build_user_response(
+            user,
+            doctor_profile,
+        ),
+    }
+
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+)
+def get_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    doctor_profile = None
+
+    if current_user.role == "doctor":
+        doctor_profile = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+    return build_user_response(current_user, doctor_profile)
