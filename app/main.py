@@ -10,6 +10,7 @@ from app.api.routes.availability import router as availability_router
 from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
 
+
 app = FastAPI(
     title="DocTime API",
     description="Doctor Appointment Management System",
@@ -25,27 +26,43 @@ def build_allowed_origins() -> list[str]:
     }
 
     frontend_url = getenv("FRONTEND_URL", "").strip()
+
     if frontend_url:
-        origins.add(frontend_url)
+        origins.add(frontend_url.rstrip("/"))
 
     extra_origins = getenv("ALLOWED_ORIGINS", "").strip()
+
     if extra_origins:
         for origin in extra_origins.split(","):
-            cleaned = origin.strip()
+            cleaned = origin.strip().rstrip("/")
             if cleaned:
                 origins.add(cleaned)
 
-    return sorted(origins)
+    return list(origins)
 
 
 allowed_origins = build_allowed_origins()
+
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS",
+    ],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+    ],
 )
 
 
@@ -58,8 +75,27 @@ def root():
     }
 
 
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(doctors_router, prefix="/api/v1")
-app.include_router(appointments_router, prefix="/api/v1")
-app.include_router(availability_router, prefix="/api/v1")
-app.include_router(reviews_router, prefix="/api/v1")
+app.include_router(
+    auth_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    doctors_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    appointments_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    availability_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    reviews_router,
+    prefix="/api/v1",
+)
