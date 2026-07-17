@@ -26,36 +26,59 @@ allowed_origins = [
 ]
 
 
-extra_origin = getenv("FRONTEND_URL")
+frontend_url = getenv("FRONTEND_URL", "").strip()
 
-if extra_origin:
-    allowed_origins.append(extra_origin)
+if frontend_url:
+    allowed_origins.append(frontend_url)
 
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"https://doctime-frontend.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS",
+    ],
     allow_headers=["*"],
 )
 
 
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    return {"message": "OK"}
-
-
-@app.get("/")
+@app.get("/", tags=["Health"])
 def root():
     return {
         "status": "online",
+        "message": "DocTime API is running successfully",
         "allowed_origins": allowed_origins,
     }
 
 
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(doctors_router, prefix="/api/v1")
-app.include_router(appointments_router, prefix="/api/v1")
-app.include_router(availability_router, prefix="/api/v1")
-app.include_router(reviews_router, prefix="/api/v1")
+app.include_router(
+    auth_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    doctors_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    appointments_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    availability_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    reviews_router,
+    prefix="/api/v1",
+)
