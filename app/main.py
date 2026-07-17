@@ -21,6 +21,7 @@ def build_allowed_origins() -> list[str]:
     origins = {
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://doctime-frontend-omega.vercel.app",
     }
 
     frontend_url = getenv("FRONTEND_URL", "").strip()
