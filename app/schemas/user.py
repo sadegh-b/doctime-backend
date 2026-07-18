@@ -1,6 +1,6 @@
-from datetime import datetime
 from typing import Literal, Optional
 
+import jdatetime
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
@@ -21,10 +21,35 @@ ALLOWED_WORK_DAYS = {
 
 
 def _validate_time_format(value: str) -> str:
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError("فرمت ساعت باید HH:MM باشد.")
+
     try:
-        datetime.strptime(value, "%H:%M")
+        hour = int(parts[0])
+        minute = int(parts[1])
     except ValueError as exc:
         raise ValueError("فرمت ساعت باید HH:MM باشد.") from exc
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("فرمت ساعت باید HH:MM باشد.")
+
+    if len(parts[0]) != 2 or len(parts[1]) != 2:
+        raise ValueError("فرمت ساعت باید HH:MM باشد.")
+
+    return value
+
+
+def _validate_jalali_date(value: str) -> str:
+    parts = value.split("/")
+    if len(parts) != 3:
+        raise ValueError("فرمت تاریخ باید YYYY/MM/DD باشد.")
+
+    try:
+        year, month, day = map(int, parts)
+        jdatetime.date(year, month, day)
+    except Exception as exc:
+        raise ValueError("تاریخ شمسی نامعتبر است.") from exc
 
     return value
 
@@ -38,6 +63,11 @@ class UserRegister(BaseModel):
 
     specialty: Optional[str] = None
     city: Optional[str] = None
+    address: Optional[str] = None
+    bio: Optional[str] = None
+    experience_years: Optional[int] = 0
+    consultation_fee: Optional[int] = 0
+
     work_shift: Optional[WorkShift] = None
     work_days: Optional[list[str]] = None
     schedule_start_date: Optional[str] = None
@@ -65,12 +95,11 @@ class UserRegister(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str) -> str:
-        value = value.strip()
         if len(value) < 6:
             raise ValueError("رمز عبور باید حداقل 6 کاراکتر باشد.")
         return value
 
-    @field_validator("specialty", "city")
+    @field_validator("specialty", "city", "address", "bio")
     @classmethod
     def validate_optional_text_fields(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -79,6 +108,24 @@ class UserRegister(BaseModel):
         value = value.strip()
         return value or None
 
+    @field_validator("experience_years")
+    @classmethod
+    def validate_experience_years(cls, value: Optional[int]) -> int:
+        if value is None:
+            return 0
+        if value < 0 or value > 80:
+            raise ValueError("سابقه کاری باید بین 0 تا 80 سال باشد.")
+        return value
+
+    @field_validator("consultation_fee")
+    @classmethod
+    def validate_consultation_fee(cls, value: Optional[int]) -> int:
+        if value is None:
+            return 0
+        if value < 0 or value > 1_000_000:
+            raise ValueError("هزینه ویزیت نامعتبر است.")
+        return value
+
     @field_validator("schedule_start_date")
     @classmethod
     def validate_schedule_start_date(cls, value: Optional[str]) -> Optional[str]:
@@ -86,13 +133,7 @@ class UserRegister(BaseModel):
             return None
 
         value = value.strip()
-
-        try:
-            datetime.strptime(value, "%Y/%m/%d")
-        except ValueError as exc:
-            raise ValueError("فرمت تاریخ باید YYYY/MM/DD باشد.") from exc
-
-        return value
+        return _validate_jalali_date(value)
 
     @field_validator(
         "morning_start",
@@ -182,8 +223,6 @@ class UserLogin(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_login_password(cls, value: str) -> str:
-        value = value.strip()
-
         if not value:
             raise ValueError("رمز عبور الزامی است.")
 

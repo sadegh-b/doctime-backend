@@ -199,37 +199,24 @@ def build_user_response(
     status_code=status.HTTP_201_CREATED,
 )
 def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
-    print(f"REGISTER 1: entered route phone={user_data.phone} role={user_data.role}", flush=True)
-
     try:
-        print("REGISTER 2: before existing phone query", flush=True)
         existing_phone = db.query(User).filter(User.phone == user_data.phone).first()
-        print("REGISTER 3: after existing phone query", flush=True)
-
         if existing_phone:
-            print("REGISTER 4: phone already exists", flush=True)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="کاربری با این شماره موبایل قبلاً ثبت شده است.",
             )
 
         if user_data.email:
-            print("REGISTER 5: before existing email query", flush=True)
             existing_email = db.query(User).filter(User.email == user_data.email).first()
-            print("REGISTER 6: after existing email query", flush=True)
-
             if existing_email:
-                print("REGISTER 7: email already exists", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="این ایمیل قبلاً ثبت شده است.",
                 )
 
-        print("REGISTER 8: before hash_password", flush=True)
         hashed_password = hash_password(user_data.password)
-        print("REGISTER 9: after hash_password", flush=True)
 
-        print("REGISTER 10: before create user object", flush=True)
         new_user = User(
             name=user_data.name,
             phone=user_data.phone,
@@ -238,79 +225,60 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
             role=user_data.role,
             is_active=True,
         )
-        print("REGISTER 11: after create user object", flush=True)
 
-        print("REGISTER 12: before db.add(new_user)", flush=True)
         db.add(new_user)
-        print("REGISTER 13: after db.add(new_user)", flush=True)
-
-        print("REGISTER 14: before db.flush() user", flush=True)
         db.flush()
-        print(f"REGISTER 15: after db.flush() user id={new_user.id}", flush=True)
 
         doctor_profile = None
 
         if user_data.role == "doctor":
-            print("REGISTER 16: doctor branch entered", flush=True)
-
             specialty = (user_data.specialty or "").strip()
             city = (user_data.city or "").strip()
 
             if not specialty:
-                print("REGISTER 17: missing specialty", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="تخصص پزشک الزامی است.",
                 )
 
             if not city:
-                print("REGISTER 18: missing city", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="شهر پزشک الزامی است.",
                 )
 
             if not user_data.work_shift:
-                print("REGISTER 19: missing work_shift", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="شیفت کاری پزشک الزامی است.",
                 )
 
             if not user_data.work_days:
-                print("REGISTER 20: missing work_days", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="حداقل یک روز کاری باید انتخاب شود.",
                 )
 
             if not user_data.schedule_start_date:
-                print("REGISTER 21: missing schedule_start_date", flush=True)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="تاریخ شروع برنامه کاری الزامی است.",
                 )
 
-            print("REGISTER 22: before create doctor profile", flush=True)
             doctor_profile = Doctor(
                 user_id=new_user.id,
                 specialty=specialty,
                 work_shift=user_data.work_shift,
                 city=city,
-                experience_years=0,
-                consultation_fee=0,
+                address=user_data.address,
+                bio=user_data.bio,
+                experience_years=user_data.experience_years or 0,
+                consultation_fee=user_data.consultation_fee or 0,
             )
-            print("REGISTER 23: after create doctor profile", flush=True)
 
-            print("REGISTER 24: before db.add(doctor_profile)", flush=True)
             db.add(doctor_profile)
-            print("REGISTER 25: after db.add(doctor_profile)", flush=True)
-
-            print("REGISTER 26: before db.flush() doctor", flush=True)
             db.flush()
-            print(f"REGISTER 27: after db.flush() doctor id={doctor_profile.id}", flush=True)
 
-            print("REGISTER 28: before create_doctor_availability", flush=True)
             create_doctor_availability(
                 db=db,
                 doctor_id=doctor_profile.id,
@@ -322,47 +290,35 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
                 afternoon_start=user_data.afternoon_start,
                 afternoon_end=user_data.afternoon_end,
             )
-            print("REGISTER 29: after create_doctor_availability", flush=True)
 
-        print("REGISTER 30: before db.commit()", flush=True)
         db.commit()
-        print("REGISTER 31: after db.commit()", flush=True)
-
-        print("REGISTER 32: before db.refresh(new_user)", flush=True)
         db.refresh(new_user)
-        print("REGISTER 33: after db.refresh(new_user)", flush=True)
 
         if doctor_profile:
-            print("REGISTER 34: before db.refresh(doctor_profile)", flush=True)
             db.refresh(doctor_profile)
-            print("REGISTER 35: after db.refresh(doctor_profile)", flush=True)
 
-        print("REGISTER 36: before create_access_token", flush=True)
         access_token = create_access_token(
             subject=new_user.id,
             role=new_user.role,
         )
-        print("REGISTER 37: after create_access_token", flush=True)
 
-        print("REGISTER 38: before success response", flush=True)
         return {
             "access_token": access_token,
             "token_type": "bearer",
             "user": build_user_response(new_user, doctor_profile),
         }
 
-    except HTTPException as exc:
-        print(f"REGISTER ERROR HTTPException: {exc.detail}", flush=True)
+    except HTTPException:
         db.rollback()
         raise
 
     except Exception as exc:
-        print(f"REGISTER ERROR Exception: {type(exc).__name__}: {exc}", flush=True)
         db.rollback()
         logger.exception(
-            "Registration failed. phone=%s role=%s",
+            "Registration failed. phone=%s role=%s error=%s",
             user_data.phone,
             user_data.role,
+            exc,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -378,11 +334,7 @@ def login_user(
     user_data: UserLogin,
     db: Session = Depends(get_db),
 ):
-    user = (
-        db.query(User)
-        .filter(User.phone == user_data.phone)
-        .first()
-    )
+    user = db.query(User).filter(User.phone == user_data.phone).first()
 
     if not user:
         raise HTTPException(
@@ -390,23 +342,15 @@ def login_user(
             detail="شماره موبایل یا رمز عبور اشتباه است.",
         )
 
-    if not verify_password(
-        user_data.password,
-        user.hashed_password,
-    ):
+    if not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="شماره موبایل یا رمز عبور اشتباه است.",
         )
 
     doctor_profile = None
-
     if user.role == "doctor":
-        doctor_profile = (
-            db.query(Doctor)
-            .filter(Doctor.user_id == user.id)
-            .first()
-        )
+        doctor_profile = db.query(Doctor).filter(Doctor.user_id == user.id).first()
 
     access_token = create_access_token(
         subject=user.id,
@@ -416,10 +360,7 @@ def login_user(
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": build_user_response(
-            user,
-            doctor_profile,
-        ),
+        "user": build_user_response(user, doctor_profile),
     }
 
 
@@ -427,14 +368,13 @@ def login_user(
     "/me",
     response_model=UserResponse,
 )
-def get_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     doctor_profile = None
 
     if current_user.role == "doctor":
-        doctor_profile = (
-            db.query(Doctor)
-            .filter(Doctor.user_id == current_user.id)
-            .first()
-        )
+        doctor_profile = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
 
     return build_user_response(current_user, doctor_profile)
