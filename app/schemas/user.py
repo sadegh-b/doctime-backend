@@ -211,6 +211,35 @@ class UserLogin(BaseModel):
     @classmethod
     def validate_phone(cls, value: str) -> str:
         value = value.strip()
+        if not value.isdigit() or len(value) != 11 or not value.startswith("09"):
+            raise ValueError("شماره موبایل نامعتبر است.")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value) < 6:
+            raise ValueError("رمز عبور باید حداقل 6 کاراکتر باشد.")
+        return value
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    phone: str
+    email: Optional[EmailStr] = None
+    role: UserRole
+    is_active: bool
+    specialty: Optional[str] = None
+    city: Optional[str] = None
+    address: Optional[str] = None
+    work_shift: Optional[WorkShift] = None
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
         if not value:
             raise ValueError("شماره موبایل الزامی است.")

@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta
 
 import jdatetime
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_db
@@ -32,6 +33,13 @@ PERSIAN_DAY_TO_WEEKDAY = {
     "یکشنبه": 6,
     "یک‌شنبه": 6,
 }
+
+
+class UpdateProfileInput(BaseModel):
+    name: str | None = None
+    specialty: str | None = None
+    city: str | None = None
+    address: str | None = None
 
 
 def parse_time_str(value: str) -> time:
@@ -378,3 +386,79 @@ def get_profile(
         doctor_profile = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
 
     return build_user_response(current_user, doctor_profile)
+
+
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+)
+def update_profile(
+    payload: UpdateProfileInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    doctor_profile = None
+
+    try:
+        if payload.name is not None:
+            name = payload.name.strip()
+            if not name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="نام نمی‌تواند خالی باشد.",
+                )
+            current_user.name = name
+
+        if current_user.role == "doctor":
+            doctor_profile = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+
+            if not doctor_profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="پروفایل پزشک پیدا نشد.",
+                )
+
+            if payload.specialty is not None:
+                specialty = payload.specialty.strip()
+                if not specialty:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="تخصص پزشک نمی‌تواند خالی باشد.",
+                    )
+                doctor_profile.specialty = specialty
+
+            if payload.city is not None:
+                city = payload.city.strip()
+                if not city:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="شهر پزشک نمی‌تواند خالی باشد.",
+                    )
+                doctor_profile.city = city
+
+            if payload.address is not None:
+                doctor_profile.address = payload.address.strip() or None
+
+        db.commit()
+        db.refresh(current_user)
+
+        if doctor_profile:
+            db.refresh(doctor_profile)
+
+        return build_user_response(current_user, doctor_profile)
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "Profile update failed. user_id=%s error=%s",
+            current_user.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="خطای داخلی هنگام ویرایش پروفایل رخ داد.",
+        )
