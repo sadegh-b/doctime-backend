@@ -197,6 +197,7 @@ def build_user_response(
         is_active=user.is_active,
         specialty=doctor_profile.specialty if doctor_profile else None,
         city=doctor_profile.city if doctor_profile else None,
+        address=doctor_profile.address if doctor_profile else None,
         work_shift=doctor_profile.work_shift if doctor_profile else None,
     )
 

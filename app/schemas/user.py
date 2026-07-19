@@ -104,7 +104,6 @@ class UserRegister(BaseModel):
     def validate_optional_text_fields(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-
         value = value.strip()
         return value or None
 
@@ -131,7 +130,6 @@ class UserRegister(BaseModel):
     def validate_schedule_start_date(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-
         value = value.strip()
         return _validate_jalali_date(value)
 
@@ -145,7 +143,6 @@ class UserRegister(BaseModel):
     def validate_time_fields(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-
         value = value.strip()
         return _validate_time_format(value)
 
@@ -156,7 +153,6 @@ class UserRegister(BaseModel):
             return None
 
         cleaned = [day.strip() for day in value if day and day.strip()]
-
         if not cleaned:
             raise ValueError("حداقل یک روز کاری باید انتخاب شود.")
 
@@ -173,30 +169,24 @@ class UserRegister(BaseModel):
 
         if not self.specialty:
             raise ValueError("تخصص پزشک الزامی است.")
-
         if not self.city:
             raise ValueError("شهر پزشک الزامی است.")
-
         if not self.work_shift:
             raise ValueError("شیفت کاری پزشک الزامی است.")
-
         if not self.work_days:
             raise ValueError("روزهای کاری پزشک الزامی است.")
-
         if not self.schedule_start_date:
             raise ValueError("تاریخ شروع برنامه کاری الزامی است.")
 
         if self.work_shift in ("morning", "both"):
             if not self.morning_start or not self.morning_end:
                 raise ValueError("ساعت شروع و پایان شیفت صبح الزامی است.")
-
             if self.morning_start >= self.morning_end:
                 raise ValueError("ساعت شروع شیفت صبح باید کمتر از پایان باشد.")
 
         if self.work_shift in ("afternoon", "both"):
             if not self.afternoon_start or not self.afternoon_end:
                 raise ValueError("ساعت شروع و پایان شیفت عصر الزامی است.")
-
             if self.afternoon_start >= self.afternoon_end:
                 raise ValueError("ساعت شروع شیفت عصر باید کمتر از پایان باشد.")
 
@@ -211,6 +201,8 @@ class UserLogin(BaseModel):
     @classmethod
     def validate_phone(cls, value: str) -> str:
         value = value.strip()
+        if not value:
+            raise ValueError("شماره موبایل الزامی است.")
         if not value.isdigit() or len(value) != 11 or not value.startswith("09"):
             raise ValueError("شماره موبایل نامعتبر است.")
         return value
@@ -218,6 +210,8 @@ class UserLogin(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str) -> str:
+        if not value:
+            raise ValueError("رمز عبور الزامی است.")
         if len(value) < 6:
             raise ValueError("رمز عبور باید حداقل 6 کاراکتر باشد.")
         return value
@@ -233,41 +227,6 @@ class UserResponse(BaseModel):
     specialty: Optional[str] = None
     city: Optional[str] = None
     address: Optional[str] = None
-    work_shift: Optional[WorkShift] = None
-
-
-class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserResponse
-
-        if not value:
-            raise ValueError("شماره موبایل الزامی است.")
-
-        if not value.isdigit() or len(value) != 11 or not value.startswith("09"):
-            raise ValueError("شماره موبایل نامعتبر است.")
-
-        return value
-
-    @field_validator("password")
-    @classmethod
-    def validate_login_password(cls, value: str) -> str:
-        if not value:
-            raise ValueError("رمز عبور الزامی است.")
-
-        return value
-
-
-class UserResponse(BaseModel):
-    id: int
-    name: str
-    phone: str
-    email: Optional[EmailStr] = None
-    role: UserRole
-    is_active: bool
-
-    specialty: Optional[str] = None
-    city: Optional[str] = None
     work_shift: Optional[WorkShift] = None
 
     model_config = {"from_attributes": True}

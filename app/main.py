@@ -18,19 +18,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-
 allowed_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://doctime-frontend-omega.vercel.app",
 ]
 
-
 frontend_url = getenv("FRONTEND_URL", "").strip()
-
 if frontend_url:
     allowed_origins.append(frontend_url)
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,27 +54,8 @@ def root():
     }
 
 
-app.include_router(
-    auth_router,
-    prefix="/api/v1",
-)
-
-app.include_router(
-    doctors_router,
-    prefix="/api/v1",
-)
-
-app.include_router(
-    appointments_router,
-    prefix="/api/v1",
-)
-
-app.include_router(
-    availability_router,
-    prefix="/api/v1",
-)
-
-app.include_router(
-    reviews_router,
-    prefix="/api/v1",
-)
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(doctors_router, prefix="/api/v1")
+app.include_router(appointments_router, prefix="/api/v1")
+app.include_router(availability_router, prefix="/api/v1")
+app.include_router(reviews_router, prefix="/api/v1")
