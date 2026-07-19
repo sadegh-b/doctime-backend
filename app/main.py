@@ -1,22 +1,53 @@
+# app/main.py
+
+import logging
 from os import getenv
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import app.models
+# این import لازم است تا مدل‌ها لود شوند و metadata ثبت شود
+import app.models  # noqa: F401
 
-from app.api.routes.auth import router as auth_router
-from app.api.routes.doctors import router as doctors_router
 from app.api.routes.appointments import router as appointments_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
+from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
 
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------------------
+
+API_PREFIX = "/api/v1"
+
+# -----------------------------------------------------------------------------
+# App
+# -----------------------------------------------------------------------------
 
 app = FastAPI(
     title="DocTime API",
     description="Doctor Appointment Management System",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
+
+# -----------------------------------------------------------------------------
+# CORS
+# -----------------------------------------------------------------------------
 
 allowed_origins = [
     "http://localhost:5173",
@@ -24,38 +55,81 @@ allowed_origins = [
     "https://doctime-frontend-omega.vercel.app",
 ]
 
-frontend_url = getenv("FRONTEND_URL", "").strip()
-if frontend_url:
+frontend_url = getenv("FRONTEND_URL", "").strip().rstrip("/")
+
+if frontend_url and frontend_url not in allowed_origins:
     allowed_origins.append(frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_origin_regex=r"https://doctime-frontend.*\.vercel\.app",
+    allow_origin_regex=r"^https://doctime-frontend[a-zA-Z0-9-]*\.vercel\.app$",
     allow_credentials=True,
-    allow_methods=[
-        "GET",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-    ],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
+# -----------------------------------------------------------------------------
+# Root / Health
+# -----------------------------------------------------------------------------
 
-@app.get("/", tags=["Health"])
-def root():
+@app.get("/", tags=["Health"], summary="API root endpoint")
+def root() -> dict[str, str]:
     return {
         "status": "online",
         "message": "DocTime API is running successfully",
-        "allowed_origins": allowed_origins,
+        "version": "1.0.0",
+        "docs": "/docs",
     }
 
 
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(doctors_router, prefix="/api/v1")
-app.include_router(appointments_router, prefix="/api/v1")
-app.include_router(availability_router, prefix="/api/v1")
-app.include_router(reviews_router, prefix="/api/v1")
+@app.get("/health", tags=["Health"], summary="Application health check")
+def health_check() -> dict[str, str]:
+    return {
+        "status": "healthy",
+        "service": "doctime-backend",
+        "version": "1.0.0",
+    }
+
+
+@app.get(f"{API_PREFIX}/health", tags=["Health"], summary="Versioned health check")
+def versioned_health_check() -> dict[str, str]:
+    return {
+        "status": "healthy",
+        "service": "doctime-backend",
+        "api_version": "v1",
+    }
+
+
+@app.get(API_PREFIX, tags=["Health"], summary="API v1 root")
+def api_v1_root() -> dict[str, str]:
+    return {
+        "status": "online",
+        "message": "DocTime API v1 is available",
+        "api_version": "v1",
+    }
+
+# -----------------------------------------------------------------------------
+# Routers
+# -----------------------------------------------------------------------------
+
+app.include_router(auth_router, prefix=API_PREFIX)
+app.include_router(doctors_router, prefix=API_PREFIX)
+app.include_router(appointments_router, prefix=API_PREFIX)
+app.include_router(availability_router, prefix=API_PREFIX)
+app.include_router(reviews_router, prefix=API_PREFIX)
+
+# -----------------------------------------------------------------------------
+# Lifecycle
+# -----------------------------------------------------------------------------
+
+@app.on_event("startup")
+def on_startup() -> None:
+    logger.info("DocTime API started successfully.")
+    logger.info("API prefix: %s", API_PREFIX)
+    logger.info("Allowed CORS origins: %s", allowed_origins)
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    logger.info("DocTime API stopped.")
