@@ -1,5 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from datetime import date, timedelta
+from typing import Dict, List, Optional
+
+import jdatetime
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy import and_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import get_current_user, get_db
@@ -15,10 +20,70 @@ router = APIRouter(
 
 ACTIVE_APPOINTMENT_STATUSES = {"pending", "confirmed"}
 
+# نقشه تبدیل روزهای هفته به نام‌های فارسی
+# date.weekday(): Monday=0 ... Sunday=6
+WEEKDAY_TO_PERSIAN = {
+    0: "دوشنبه",
+    1: "سه‌شنبه",
+    2: "چهارشنبه",
+    3: "پنج‌شنبه",
+    4: "جمعه",
+    5: "شنبه",
+    6: "یکشنبه",
+}
+
+# اسامی ماه‌های شمسی برای فرمت‌دهی دقیق
+JALALI_MONTHS = [
+    "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+]
+
+
+# --- اسکیماهای ورودی و خروجی Pydantic ---
 
 class AppointmentCreate(BaseModel):
     availability_id: int
     notes: str | None = None
+
+
+class SlotDetailOut(BaseModel):
+    slot_id: int = Field(..., description="شناسه بازه زمانی")
+    start_time: str = Field(..., description="ساعت شروع به فرمت HH:MM")
+    end_time: str = Field(..., description="ساعت پایان به فرمت HH:MM")
+    is_available: bool = Field(..., description="آیا نوبت آزاد است؟")
+    is_booked: bool = Field(..., description="آیا نوبت رزرو شده است؟")
+
+
+class DailyScheduleOut(BaseModel):
+    date: str = Field(..., description="تاریخ میلادی به فرمت YYYY-MM-DD")
+    persian_date: str = Field(..., description="تاریخ شمسی به فرمت ۱۴۰۵/۰۵/۰۳")
+    persian_formatted_date: str = Field(..., description="تاریخ خوانا مثل: ۱۴۰۵ مرداد ۳")
+    persian_day_name: str = Field(..., description="نام روز هفته به فارسی")
+    slots: List[SlotDetailOut] = Field(default_factory=list, description="لیست بازه‌های زمانی")
+
+
+class DoctorScheduleResponse(BaseModel):
+    success: bool
+    doctor_id: int
+    schedule: List[DailyScheduleOut]
+
+
+# --- توابع کمکی مبدل تاریخ ---
+
+def convert_to_jalali_details(gregorian_date: date) -> tuple[str, str]:
+    """
+    تبدیل تاریخ میلادی به دو فرمت شمسی عددی و شمسی متنی خوانا
+    """
+    j_date = jdatetime.date.fromgregorian(date=gregorian_date)
+
+    # فرمت عددی: 1405/05/03
+    numeric_str = f"{j_date.year}/{j_date.month:02d}/{j_date.day:02d}"
+
+    # فرمت متنی خوانا: 1405 مرداد 3
+    month_name = JALALI_MONTHS[j_date.month - 1]
+    formatted_str = f"{j_date.year} {month_name} {j_date.day}"
+
+    return numeric_str, formatted_str
 
 
 def get_current_doctor_profile(db: Session, current_user: User) -> Doctor:
@@ -27,15 +92,12 @@ def get_current_doctor_profile(db: Session, current_user: User) -> Doctor:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="فقط پزشک به این بخش دسترسی دارد.",
         )
-
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-
     if not doctor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="پروفایل پزشک پیدا نشد.",
         )
-
     return doctor
 
 
@@ -46,13 +108,11 @@ def get_locked_appointment(db: Session, appointment_id: int) -> Appointment:
         .with_for_update(of=Appointment)
         .first()
     )
-
     if not appointment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="نوبت پیدا نشد.",
         )
-
     return appointment
 
 
@@ -140,6 +200,76 @@ def execute_booking(
         )
 
 
+# --- مسیرها (Endpoints) ---
+
+@router.get("/doctors/{doctor_id}/schedule", response_model=DoctorScheduleResponse)
+def get_doctor_schedule_grid(
+    doctor_id: int,
+    start_date: Optional[date] = None,
+    days_limit: int = Query(default=14, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """
+    دریافت جدول نوبت‌های پزشک به‌صورت گروه‌بندی‌شده بر اساس روز.
+    خروجی برای رندر مستقیم در فرانت‌اِند آماده است.
+    """
+    if start_date is None:
+        start_date = date.today()
+
+    # end_date به‌صورت exclusive استفاده می‌شود تا days_limit دقیق باشد
+    end_date = start_date + timedelta(days=days_limit)
+
+    # همه‌ی بازه‌ها را بگیر: هم آزاد، هم رزرو شده
+    availabilities = (
+        db.query(Availability)
+        .filter(
+            and_(
+                Availability.doctor_id == doctor_id,
+                Availability.date >= start_date,
+                Availability.date < end_date,
+            )
+        )
+        .order_by(Availability.date, Availability.start_time)
+        .all()
+    )
+
+    # دسته‌بندی داده‌ها بر اساس تاریخ
+    grouped_schedule: Dict[date, List[SlotDetailOut]] = {}
+
+    for slot in availabilities:
+        slot_data = SlotDetailOut(
+            slot_id=slot.id,
+            start_time=slot.start_time.strftime("%H:%M"),
+            end_time=slot.end_time.strftime("%H:%M"),
+            is_available=slot.is_available,
+            is_booked=slot.is_booked,
+        )
+        grouped_schedule.setdefault(slot.date, []).append(slot_data)
+
+    # ساخت خروجی نهایی
+    schedule_list: List[DailyScheduleOut] = []
+    for target_date in sorted(grouped_schedule.keys()):
+        weekday_index = target_date.weekday()
+        persian_day = WEEKDAY_TO_PERSIAN.get(weekday_index, "نامشخص")
+        persian_numeric, persian_text = convert_to_jalali_details(target_date)
+
+        schedule_list.append(
+            DailyScheduleOut(
+                date=target_date.isoformat(),
+                persian_date=persian_numeric,
+                persian_formatted_date=persian_text,
+                persian_day_name=persian_day,
+                slots=grouped_schedule[target_date],
+            )
+        )
+
+    return DoctorScheduleResponse(
+        success=True,
+        doctor_id=doctor_id,
+        schedule=schedule_list,
+    )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_appointment(
     body: AppointmentCreate,
@@ -200,7 +330,7 @@ def get_my_appointments(
                     else None
                 ),
                 "start_time": (
-                    appointment.availability.start_time.isoformat()
+                    appointment.availability.start_time.strftime("%H:%M")
                     if appointment.availability
                     else None
                 ),
@@ -377,7 +507,7 @@ def get_all_appointments_filtered(
                     else None
                 ),
                 "start_time": (
-                    item.availability.start_time.isoformat()
+                    item.availability.start_time.strftime("%H:%M")
                     if item.availability
                     else None
                 ),

@@ -1,39 +1,43 @@
 from datetime import datetime, timezone
-
-from sqlalchemy import Boolean, DateTime, String
+from typing import Optional
+from sqlalchemy import Boolean, DateTime, String, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from app.database.base import Base
-
 
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
+        Integer,
         primary_key=True,
         index=True,
     )
 
-    # این ستون فعلاً برای سازگاری با قسمت‌های قدیمی پروژه حفظ می‌شود.
     name: Mapped[str] = mapped_column(
-        String(120),
+        String(200),
         nullable=False,
     )
 
     first_name: Mapped[str] = mapped_column(
-        String(60),
+        String(100),
         nullable=False,
     )
 
     last_name: Mapped[str] = mapped_column(
-        String(80),
+        String(100),
         nullable=False,
     )
 
-    # nullable=True برای سازگاری با کاربران قدیمی است.
-    # در schema ثبت‌نام، کد ملی برای کاربران جدید اجباری خواهد بود.
-    national_id: Mapped[str | None] = mapped_column(
+    national_id: Mapped[str] = mapped_column(
         String(10),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    # فیلد ایمیل اضافه شد - اختیاری است اما اگر وارد شود باید یکتا باشد
+    email: Mapped[Optional[str]] = mapped_column(
+        String(255),
         unique=True,
         index=True,
         nullable=True,
@@ -46,13 +50,6 @@ class User(Base):
         nullable=False,
     )
 
-    email: Mapped[str | None] = mapped_column(
-        String(255),
-        unique=True,
-        index=True,
-        nullable=True,
-    )
-
     hashed_password: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -61,7 +58,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="patient",
+        default="patient",  # patient, doctor, admin
     )
 
     is_active: Mapped[bool] = mapped_column(
@@ -89,3 +86,6 @@ class User(Base):
         foreign_keys="[Appointment.patient_id]",
         cascade="all, delete-orphan",
     )
+
+    def __repr__(self) -> str:
+        return f"<User {self.phone} - {self.role}>"

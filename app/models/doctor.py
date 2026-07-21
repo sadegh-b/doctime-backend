@@ -1,8 +1,7 @@
-from sqlalchemy import ForeignKey, Integer, String
+# app/models/doctor.py
+from sqlalchemy import ForeignKey, Integer, String, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from app.database.base import Base
-
 
 class Doctor(Base):
     __tablename__ = "doctors"
@@ -18,10 +17,21 @@ class Doctor(Base):
         nullable=False,
     )
 
-    # تخصص پزشک یک متن آزاد است، نه Enum و نه لیست ثابت.
+    medical_council_number: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
     specialty: Mapped[str] = mapped_column(
         String(120),
         nullable=False,
+    )
+
+    sub_specialty: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
     )
 
     work_shift: Mapped[str] = mapped_column(
@@ -45,6 +55,16 @@ class Doctor(Base):
         nullable=True,
     )
 
+    latitude: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    longitude: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
     bio: Mapped[str | None] = mapped_column(
         String(2000),
         nullable=True,
@@ -60,6 +80,12 @@ class Doctor(Base):
         Integer,
         nullable=False,
         default=0,
+    )
+
+    waiting_time_estimate: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="کمتر از نیم ساعت",
     )
 
     user = relationship(

@@ -1,0 +1,16 @@
+﻿{
+    "message":  "ÙØ±ÙØ¯ Ø¨Ø§ Ù\u0085ÙÙÙÛØª Ø§ÙØ¬Ø§Ù\u0085 Ø´Ø¯.",
+    "user":  {
+                 "id":  3,
+                 "first_name":  "ØµØ§Ø¯Ù",
+                 "last_name":  "Ø¨ÙÙÚ",
+                 "phone":  "09351234567",
+                 "national_id":  "0084575948",
+                 "role":  "patient",
+                 "is_active":  true
+             },
+    "token":  {
+                  "access_token":  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzIiwiZXhwIjoxNzg1MTQ2ODA0LCJyb2xlIjoicGF0aWVudCJ9.7SeekfNlfU1V3ieI_-11V3u_vMaQVQfTygMNm__itPM",
+                  "token_type":  "bearer"
+              }
+}

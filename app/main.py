@@ -6,9 +6,27 @@ from os import getenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# این import لازم است تا مدل‌ها لود شوند و metadata ثبت شود
-import app.models  # noqa: F401
+# ایمپورت کردن بیس دیتابیس برای ساختن جدول‌ها
+from app.database.base import Base, engine
 
+# ایمپورت دقیق مدل‌ها برای شناسایی توسط metadata
+from app.models.user import User  # noqa: F401
+from app.models.doctor import Doctor  # noqa: F401
+from app.models.availability import Availability  # noqa: F401
+
+# توجه: اگر مدل‌های Appointment یا Review با نام دیگری هستند یا وجود ندارند،
+# به صورت try-except ایمپورت می‌کنیم تا سرور کرش نکند.
+try:
+    from app.models.appointment import Appointment  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    from app.models.review import Review  # noqa: F401
+except ImportError:
+    pass
+
+# ایمپورت راوترها
 from app.api.routes.appointments import router as appointments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
@@ -69,6 +87,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # -----------------------------------------------------------------------------
 # Root / Health
 # -----------------------------------------------------------------------------
@@ -109,6 +128,7 @@ def api_v1_root() -> dict[str, str]:
         "api_version": "v1",
     }
 
+
 # -----------------------------------------------------------------------------
 # Routers
 # -----------------------------------------------------------------------------
@@ -119,12 +139,17 @@ app.include_router(appointments_router, prefix=API_PREFIX)
 app.include_router(availability_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
 
+
 # -----------------------------------------------------------------------------
 # Lifecycle
 # -----------------------------------------------------------------------------
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # ساختن تمام جدول‌ها در دیتابیس نو بنیاد
+    logger.info("Creating database tables if not exist...")
+    Base.metadata.create_all(bind=engine)
+
     logger.info("DocTime API started successfully.")
     logger.info("API prefix: %s", API_PREFIX)
     logger.info("Allowed CORS origins: %s", allowed_origins)
