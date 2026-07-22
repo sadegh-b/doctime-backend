@@ -18,6 +18,23 @@ DIGIT_TRANSLATION_TABLE = str.maketrans(
 )
 
 
+DAY_ALIASES = {
+    "شنبه": "شنبه",
+    "یکشنبه": "یکشنبه",
+    "یک شنبه": "یکشنبه",
+    "یک‌شنبه": "یکشنبه",
+    "دوشنبه": "دوشنبه",
+    "سهشنبه": "سه شنبه",
+    "سه شنبه": "سه شنبه",
+    "سه‌شنبه": "سه شنبه",
+    "چهارشنبه": "چهارشنبه",
+    "پنجشنبه": "پنج شنبه",
+    "پنج شنبه": "پنج شنبه",
+    "پنج‌شنبه": "پنج شنبه",
+    "جمعه": "جمعه",
+}
+
+
 def normalize_digits(value: str) -> str:
     if value is None:
         return value
@@ -28,6 +45,11 @@ def normalize_spaces(value: str) -> str:
     if value is None:
         return value
     return " ".join(value.replace("\u200c", " ").split())
+
+
+def normalize_day_name(value: str) -> str:
+    value = normalize_spaces(value)
+    return DAY_ALIASES.get(value, value)
 
 
 def is_valid_iranian_national_id(value: str) -> bool:
@@ -156,25 +178,12 @@ class UserRegister(BaseModel):
         if value is None:
             return value
 
-        allowed_days = {
-            "شنبه",
-            "یکشنبه",
-            "یک‌شنبه",
-            "دوشنبه",
-            "سه شنبه",
-            "سه‌شنبه",
-            "چهارشنبه",
-            "پنج شنبه",
-            "پنج‌شنبه",
-            "جمعه",
-        }
-
         cleaned_days = []
         for day in value:
-            day = normalize_spaces(day)
-            if day not in allowed_days:
+            normalized_day = normalize_day_name(day)
+            if normalized_day not in DAY_ALIASES.values():
                 raise ValueError(f"روز کاری نامعتبر است: {day}")
-            cleaned_days.append(day)
+            cleaned_days.append(normalized_day)
 
         return cleaned_days
 
@@ -191,6 +200,21 @@ class UserRegister(BaseModel):
             return value
 
         value = normalize_digits(value.strip())
+        return value or None
+
+    @field_validator(
+        "specialty",
+        "sub_specialty",
+        "province",
+        "city",
+        "address",
+        "bio",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = normalize_spaces(value)
         return value or None
 
     @model_validator(mode="after")
