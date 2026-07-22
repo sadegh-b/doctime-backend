@@ -1,6 +1,7 @@
 import traceback
 from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 import jdatetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -182,104 +183,132 @@ def execute_booking(
     current_user: User,
     notes: str | None = None,
 ):
-
     print("=" * 60)
+    print("BOOKING REQUEST")
     print("slot_id =", slot_id)
+    print("user_id =", current_user.id)
     print("=" * 60)
 
     if current_user.role != "patient":
         raise HTTPException(
             status_code=403,
-            detail="فقط بیمار می‌تواند رزرو کند."
+            detail="فقط بیمار می‌تواند رزرو کند.",
         )
 
-
     try:
-
+        # قفل‌کردن اسلات باعث می‌شود دو درخواست هم‌زمان
+        # نتوانند یک اسلات را هم‌زمان رزرو کنند.
         slot = (
             db.query(Availability)
-            .filter(
-                Availability.id == slot_id
-            )
+            .filter(Availability.id == slot_id)
             .with_for_update()
             .first()
         )
 
-        if slot:
-            print(
-                "FOUND SLOT:",
-                "id =", slot.id,
-                "doctor_id =", slot.doctor_id,
-                "booked =", slot.is_booked,
-                "available =", slot.is_available
-            )
-        else:
-            print("SLOT NOT FOUND")
-
-
         if not slot:
             raise HTTPException(
                 status_code=404,
-                detail="زمان پیدا نشد."
+                detail="زمان پیدا نشد.",
             )
 
+        print(
+            "FOUND SLOT:",
+            "id =", slot.id,
+            "doctor_id =", slot.doctor_id,
+            "booked =", slot.is_booked,
+            "available =", slot.is_available,
+        )
 
-        if (
-            slot.is_booked
-            or not slot.is_available
-        ):
+        if slot.is_booked or not slot.is_available:
             raise HTTPException(
                 status_code=400,
-                detail="این زمان قبلاً رزرو شده است."
+                detail="این زمان قبلاً رزرو شده است.",
             )
-
 
         doctor = (
             db.query(Doctor)
-            .filter(
-                Doctor.id == slot.doctor_id
-            )
+            .filter(Doctor.id == slot.doctor_id)
             .first()
         )
-
 
         if not doctor:
             raise HTTPException(
                 status_code=404,
-                detail="پزشک پیدا نشد."
+                detail="پزشک پیدا نشد.",
             )
 
-
+        # جلوگیری از داشتن دو نوبت فعال برای یک بیمار،
+        # نزد یک پزشک، در یک روز.
         duplicate = (
             db.query(Appointment)
             .join(
                 Availability,
-                Appointment.availability_id ==
-                Availability.id
+                Appointment.availability_id == Availability.id,
             )
             .filter(
-                Appointment.patient_id ==
-                current_user.id,
-
-                Appointment.doctor_id ==
-                slot.doctor_id,
-
-                Availability.date ==
-                slot.date,
-
+                Appointment.patient_id == current_user.id,
+                Appointment.doctor_id == slot.doctor_id,
+                Availability.date == slot.date,
                 Appointment.status.in_(
                     ACTIVE_APPOINTMENT_STATUSES
-                )
+                ),
             )
             .first()
         )
 
-
         if duplicate:
             raise HTTPException(
                 status_code=400,
-                detail="برای این پزشک در این روز نوبت فعال دارید."
+                detail="برای این پزشک در این روز نوبت فعال دارید.",
             )
+
+        # کد قبلی DT{slot_id}{patient_id} در رزرو مجدد
+        # ممکن بود تکراری شود؛ این کد برای هر رزرو جدید ساخته می‌شود.
+        tracking_code = f"DT{uuid4().hex[:16]}"
+
+        appointment = Appointment(
+            patient_id=current_user.id,
+            doctor_id=slot.doctor_id,
+            availability_id=slot.id,
+            status="confirmed",
+            tracking_code=tracking_code,
+            disclaimer="رزرو آنلاین نوبت",
+            held_at=datetime.utcnow(),
+            notes=notes.strip() if notes and notes.strip() else None,
+        )
+
+        slot.is_booked = True
+        slot.is_available = False
+
+        db.add(appointment)
+        db.commit()
+        db.refresh(appointment)
+
+        print(
+            "BOOKING SUCCESS:",
+            "appointment_id =", appointment.id,
+            "tracking_code =", appointment.tracking_code,
+        )
+
+        return appointment
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+
+        print("=" * 60)
+        print("BOOKING ERROR")
+        print(repr(exc))
+        traceback.print_exc()
+        print("=" * 60)
+
+        raise HTTPException(
+            status_code=500,
+            detail="خطای داخلی هنگام رزرو نوبت.",
+        )
 
 
         appointment = Appointment(
@@ -637,107 +666,90 @@ def cancel_appointment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-
     appointment = get_locked_appointment(
         db,
-        appointment_id
+        appointment_id,
     )
 
-
     if current_user.role == "patient":
-
         if appointment.patient_id != current_user.id:
             raise HTTPException(
                 status_code=403,
-                detail="اجازه لغو این نوبت را ندارید."
+                detail="اجازه لغو این نوبت را ندارید.",
             )
 
-
     elif current_user.role == "doctor":
-
         doctor = get_current_doctor_profile(
             db,
-            current_user
+            current_user,
         )
 
         if appointment.doctor_id != doctor.id:
             raise HTTPException(
                 status_code=403,
-                detail="اجازه لغو این نوبت را ندارید."
+                detail="اجازه لغو این نوبت را ندارید.",
             )
-
 
     else:
         raise HTTPException(
             status_code=403,
-            detail="دسترسی غیرمجاز."
+            detail="دسترسی غیرمجاز.",
         )
-
-
 
     if appointment.status == "cancelled":
-
         raise HTTPException(
             status_code=400,
-            detail="این نوبت قبلاً لغو شده."
+            detail="این نوبت قبلاً لغو شده.",
         )
-
 
     if appointment.status == "completed":
-
         raise HTTPException(
             status_code=400,
-            detail="نوبت تکمیل شده قابل لغو نیست."
+            detail="نوبت تکمیل شده قابل لغو نیست.",
         )
 
-
     try:
-
         if appointment.availability_id:
-
+            # اسلات را هم قفل می‌کنیم تا لغو و رزرو هم‌زمان
+            # روی یک availability وضعیت ناسازگار نسازند.
             slot = (
                 db.query(Availability)
                 .filter(
-                    Availability.id ==
-                    appointment.availability_id
+                    Availability.id
+                    == appointment.availability_id
                 )
+                .with_for_update()
                 .first()
             )
 
-
             if slot:
-
                 slot.is_booked = False
                 slot.is_available = True
 
-
-
         appointment.status = "cancelled"
-
 
         db.commit()
         db.refresh(appointment)
 
-
-
         return {
             "success": True,
             "message": "نوبت لغو شد.",
-            "status": appointment.status
+            "status": appointment.status,
         }
 
-
-
-    except Exception:
-
+    except Exception as exc:
         db.rollback()
+
+        print("=" * 60)
+        print("CANCEL ERROR")
+        print(repr(exc))
+        traceback.print_exc()
+        print("=" * 60)
 
         raise HTTPException(
             status_code=500,
-            detail="خطا در لغو نوبت."
+            detail="خطا در لغو نوبت.",
         )
-
-
 
 
 
