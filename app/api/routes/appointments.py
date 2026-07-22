@@ -1,3 +1,4 @@
+import traceback
 from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional
 
@@ -299,14 +300,22 @@ def execute_booking(
         raise
 
 
-    except Exception:
+    except Exception as e:
         db.rollback()
+
+        print("=" * 60)
+        print("BOOKING ERROR")
+        print(repr(e))
+        traceback.print_exc()
+        print("=" * 60)
 
         raise HTTPException(
             status_code=500,
-            detail="خطای ثبت نوبت."
+            detail=str(e)
         )
-        # ==========================
+
+
+# ==========================
 # Endpoints
 # ==========================
 
@@ -593,7 +602,9 @@ def get_my_appointments(
         "success": True,
         "items": items
     }
-    # ==========================
+
+
+# ==========================
 # Cancel Appointment
 # ==========================
 
