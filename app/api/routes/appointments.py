@@ -183,6 +183,10 @@ def execute_booking(
     notes: str | None = None,
 ):
 
+    print("=" * 60)
+    print("slot_id =", slot_id)
+    print("=" * 60)
+
     if current_user.role != "patient":
         raise HTTPException(
             status_code=403,
@@ -200,6 +204,17 @@ def execute_booking(
             .with_for_update()
             .first()
         )
+
+        if slot:
+            print(
+                "FOUND SLOT:",
+                "id =", slot.id,
+                "doctor_id =", slot.doctor_id,
+                "booked =", slot.is_booked,
+                "available =", slot.is_available
+            )
+        else:
+            print("SLOT NOT FOUND")
 
 
         if not slot:
@@ -441,6 +456,12 @@ def create_appointment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+
+    print("=" * 60)
+    print("REQUEST BODY:", body.model_dump())
+    print("availability_id =", body.availability_id)
+    print("user_id =", current_user.id)
+    print("=" * 60)
 
     appointment = execute_booking(
         db,
