@@ -272,7 +272,7 @@ def execute_booking(
             availability_id=slot.id,
             status="confirmed",
             tracking_code=f"DT{slot.id}{current_user.id}",
-            disclaimer="رزرو اینترنتی انجام شد.",
+            disclaimer="رزرو آنلاین نوبت",
             held_at=datetime.utcnow(),
             notes=(
                 notes.strip()
@@ -299,14 +299,12 @@ def execute_booking(
         raise
 
 
-    except Exception as e:
+    except Exception:
         db.rollback()
-
-        print("BOOKING ERROR:", e)
 
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail="خطای ثبت نوبت."
         )
         # ==========================
 # Endpoints
