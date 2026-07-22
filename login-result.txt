@@ -1,0 +1,1 @@
+﻿{"message":"ÙØ±ÙØ¯ ÙÙÙÙÛØªâØ¢ÙÛØ² Ø¨ÙØ¯.","user":{"id":3,"name":"Ø³Ø¯ÙÚ©Û","phone":"09152706370","email":null,"role":"patient","is_active":true},"token":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzIiwiZXhwIjoxNzg1MzMxNDEwLCJyb2xlIjoicGF0aWVudCJ9._eEkiy7cIo9-rELT1EAePEo_a-tpPdGPD3Eoieb4-34","token_type":"bearer"}}

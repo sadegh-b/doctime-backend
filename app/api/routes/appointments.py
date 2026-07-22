@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional
 
 import jdatetime
@@ -271,6 +271,9 @@ def execute_booking(
             doctor_id=slot.doctor_id,
             availability_id=slot.id,
             status="confirmed",
+            tracking_code=f"DT{slot.id}{current_user.id}",
+            disclaimer="رزرو اینترنتی انجام شد.",
+            held_at=datetime.utcnow(),
             notes=(
                 notes.strip()
                 if notes
@@ -296,12 +299,14 @@ def execute_booking(
         raise
 
 
-    except Exception:
+    except Exception as e:
         db.rollback()
+
+        print("BOOKING ERROR:", e)
 
         raise HTTPException(
             status_code=500,
-            detail="خطای ثبت نوبت."
+            detail=str(e)
         )
         # ==========================
 # Endpoints
