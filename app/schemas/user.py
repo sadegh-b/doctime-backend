@@ -1,7 +1,8 @@
 import re
+from datetime import date, time
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator, EmailStr
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 UserRole = Literal["patient", "doctor", "admin"]
 WorkShift = Literal["morning", "afternoon", "both"]
@@ -51,7 +52,7 @@ class UserRegister(BaseModel):
     phone: str
     password: str
     national_id: str
-    email: Optional[str] = None  # فیلد ایمیل اضافه شد
+    email: Optional[str] = None
 
     role: UserRole = "patient"
 
@@ -113,7 +114,6 @@ class UserRegister(BaseModel):
         if not value:
             return None
         value = value.strip().lower()
-        # پترن استاندارد برای چک کردن صحت ساختار ایمیل
         email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
         if not re.match(email_regex, value):
             raise ValueError("فرمت ایمیل وارد شده معتبر نیست.")
@@ -184,7 +184,6 @@ class UserRegister(BaseModel):
         "morning_end",
         "afternoon_start",
         "afternoon_end",
-        "email",
     )
     @classmethod
     def normalize_optional_string(cls, value: Optional[str]) -> Optional[str]:
@@ -235,7 +234,7 @@ class UserOut(BaseModel):
     id: int
     name: str
     phone: str
-    email: Optional[str] = None  # ایمیل به خروجی کاربر اضافه شد
+    email: Optional[str] = None
     role: UserRole
     is_active: bool = True
 
@@ -246,7 +245,7 @@ class DoctorOut(BaseModel):
     id: int
     name: str
     phone: str
-    email: Optional[str] = None  # ایمیل به خروجی پزشک اضافه شد
+    email: Optional[str] = None
     role: UserRole = "doctor"
     is_active: bool = True
 
@@ -270,7 +269,7 @@ class DoctorOut(BaseModel):
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
-    email: Optional[str] = None  # امکان آپدیت ایمیل
+    email: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -348,6 +347,7 @@ class DoctorUpdate(BaseModel):
         return value
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class AvailabilityOut(BaseModel):
     id: int
