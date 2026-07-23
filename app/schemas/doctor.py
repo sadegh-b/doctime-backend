@@ -1,8 +1,10 @@
+# Path: app/schemas/doctor.py
+
 from pydantic import BaseModel, Field
 
 
 class DoctorCreate(BaseModel):
-    specialty: str = Field(min_length=2, max_length=120)
+    specialty_id: int = Field(..., description="شناسه عددی تخصص پزشک")
     city: str = Field(min_length=2, max_length=120)
     work_shift: str = Field(default="morning", max_length=20)
     address: str | None = Field(default=None, max_length=255)
@@ -13,7 +15,7 @@ class DoctorCreate(BaseModel):
 
 class DoctorUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
-    specialty: str | None = Field(default=None, min_length=2, max_length=120)
+    specialty_id: int | None = Field(default=None, description="شناسه عددی تخصص پزشک")
     city: str | None = Field(default=None, min_length=2, max_length=120)
     work_shift: str | None = Field(default=None, max_length=20)
     address: str | None = Field(default=None, max_length=255)
@@ -29,7 +31,8 @@ class DoctorUpdate(BaseModel):
 class DoctorResponse(BaseModel):
     id: int
     user_id: int
-    specialty: str
+    specialty_id: int
+    specialty_name: str | None = None
     work_shift: str
     city: str
     address: str | None = None
@@ -48,7 +51,8 @@ class DoctorProfileResponse(BaseModel):
     phone: str
     email: str | None = None
     role: str
-    specialty: str
+    specialty_id: int
+    specialty_name: str | None = None
     work_shift: str
     city: str
     address: str | None = None
@@ -61,7 +65,8 @@ class DoctorListItem(BaseModel):
     id: int
     user_id: int
     name: str | None = None
-    specialty: str
+    specialty_id: int
+    specialty_name: str | None = None
     work_shift: str
     city: str
     address: str | None = None

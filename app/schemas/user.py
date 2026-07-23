@@ -1,3 +1,5 @@
+# Path: app/schemas/user.py
+
 import re
 from datetime import date, time
 from typing import List, Literal, Optional
@@ -79,7 +81,7 @@ class UserRegister(BaseModel):
     role: UserRole = "patient"
 
     medical_council_number: Optional[str] = None
-    specialty: Optional[str] = None
+    specialty_id: Optional[int] = None  # تغییر فیلد متنی به شناسه عددی تخصص
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -156,6 +158,13 @@ class UserRegister(BaseModel):
 
         return value
 
+    @field_validator("specialty_id")
+    @classmethod
+    def validate_specialty_id(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("شناسه تخصص باید یک عدد مثبت معتبر باشد.")
+        return value
+
     @field_validator("experience_years")
     @classmethod
     def validate_experience_years(cls, value: int) -> int:
@@ -203,7 +212,6 @@ class UserRegister(BaseModel):
         return value or None
 
     @field_validator(
-        "specialty",
         "sub_specialty",
         "province",
         "city",
@@ -225,7 +233,7 @@ class UserRegister(BaseModel):
         if not self.medical_council_number:
             raise ValueError("کد نظام پزشکی برای پزشک الزامی است.")
 
-        if not self.specialty:
+        if self.specialty_id is None:
             raise ValueError("تخصص برای پزشک الزامی است.")
 
         if not self.province:
@@ -275,7 +283,8 @@ class DoctorOut(BaseModel):
 
     doctor_id: Optional[int] = None
     medical_council_number: Optional[str] = None
-    specialty: Optional[str] = None
+    specialty_id: Optional[int] = None  # اضافه شدن شناسه تخصص
+    specialty: Optional[str] = None  # نام متنی تخصص برای نمایش در فرانت‌اند
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -330,7 +339,7 @@ class UserUpdate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
-    specialty: Optional[str] = None
+    specialty_id: Optional[int] = None  # تغییر فیلد متنی به شناسه عددی تخصص
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -342,13 +351,20 @@ class DoctorUpdate(BaseModel):
     consultation_fee: Optional[int] = None
     work_shift: Optional[WorkShift] = None
 
-    @field_validator("specialty", "sub_specialty", "province", "city", "address", "bio")
+    @field_validator("sub_specialty", "province", "city", "address", "bio")
     @classmethod
     def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
         value = normalize_spaces(value)
         return value or None
+
+    @field_validator("specialty_id")
+    @classmethod
+    def validate_specialty_id(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("شناسه تخصص باید یک عدد مثبت معتبر باشد.")
+        return value
 
     @field_validator("experience_years")
     @classmethod

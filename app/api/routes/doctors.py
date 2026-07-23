@@ -1,10 +1,12 @@
+# Path: app/api/routes/doctors.py
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import get_current_user, get_db
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, Specialty
 from app.models.user import User
 from app.schemas.doctor import (
     DoctorCreate,
@@ -23,13 +25,24 @@ router = APIRouter(
 )
 
 
+def get_or_create_specialty(db: Session, specialty_name: str) -> Specialty:
+    specialty_name = specialty_name.strip()
+    specialty = db.query(Specialty).filter(Specialty.name == specialty_name).first()
+    if not specialty:
+        slug = specialty_name.lower().replace(" ", "-")
+        specialty = Specialty(name=specialty_name, slug=slug)
+        db.add(specialty)
+        db.flush()
+    return specialty
+
+
 def get_doctor_profile_or_404(
     db: Session,
     user_id: int,
 ) -> Doctor:
     doctor = (
         db.query(Doctor)
-        .options(joinedload(Doctor.user))
+        .options(joinedload(Doctor.user), joinedload(Doctor.specialty_relation))
         .filter(Doctor.user_id == user_id)
         .first()
     )
@@ -47,13 +60,14 @@ def build_doctor_profile_response(
     doctor: Doctor,
     user: User,
 ) -> DoctorProfileResponse:
+    specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
     return DoctorProfileResponse(
         id=user.id,
         name=user.name,
         phone=user.phone,
         email=getattr(user, "email", None),
         role=user.role,
-        specialty=doctor.specialty,
+        specialty=specialty_name,
         work_shift=doctor.work_shift,
         city=doctor.city,
         address=doctor.address,
@@ -66,11 +80,12 @@ def build_doctor_profile_response(
 def build_doctor_list_item(
     doctor: Doctor,
 ) -> DoctorListItem:
+    specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
     return DoctorListItem(
         id=doctor.id,
         user_id=doctor.user_id,
         name=doctor.user.name if doctor.user else None,
-        specialty=doctor.specialty,
+        specialty=specialty_name,
         work_shift=doctor.work_shift,
         city=doctor.city,
         address=doctor.address,
@@ -108,9 +123,11 @@ def create_doctor_profile(
             detail="Doctor profile already exists",
         )
 
+    specialty_obj = get_or_create_specialty(db, payload.specialty or "عمومی")
+
     doctor = Doctor(
         user_id=current_user.id,
-        specialty=payload.specialty,
+        specialty_id=specialty_obj.id,
         work_shift=payload.work_shift,
         city=payload.city,
         address=payload.address,
@@ -189,6 +206,11 @@ def update_my_doctor_profile(
     if "name" in update_data:
         current_user.name = update_data.pop("name")
 
+    if "specialty" in update_data:
+        specialty_val = update_data.pop("specialty")
+        specialty_obj = get_or_create_specialty(db, specialty_val)
+        doctor.specialty_id = specialty_obj.id
+
     for field_name, field_value in update_data.items():
         setattr(doctor, field_name, field_value)
 
@@ -228,7 +250,8 @@ def search_doctors(
     query = (
         db.query(Doctor)
         .join(Doctor.user)
-        .options(joinedload(Doctor.user))
+        .join(Doctor.specialty_relation)
+        .options(joinedload(Doctor.user), joinedload(Doctor.specialty_relation))
     )
 
     if q:
@@ -237,7 +260,7 @@ def search_doctors(
         query = query.filter(
             or_(
                 User.name.ilike(search_value),
-                Doctor.specialty.ilike(search_value),
+                Specialty.name.ilike(search_value),
                 Doctor.city.ilike(search_value),
                 Doctor.address.ilike(search_value),
                 Doctor.bio.ilike(search_value),
@@ -251,7 +274,7 @@ def search_doctors(
 
     if specialty:
         query = query.filter(
-            Doctor.specialty.ilike(f"%{specialty.strip()}%"),
+            Specialty.name.ilike(f"%{specialty.strip()}%"),
         )
 
     doctors = query.order_by(Doctor.id.desc()).all()
@@ -277,7 +300,7 @@ def list_doctors(
 ):
     doctors = (
         db.query(Doctor)
-        .options(joinedload(Doctor.user))
+        .options(joinedload(Doctor.user), joinedload(Doctor.specialty_relation))
         .order_by(Doctor.id.desc())
         .all()
     )
@@ -304,7 +327,7 @@ def get_doctor_by_id(
 ):
     doctor = (
         db.query(Doctor)
-        .options(joinedload(Doctor.user))
+        .options(joinedload(Doctor.user), joinedload(Doctor.specialty_relation))
         .filter(Doctor.id == doctor_id)
         .first()
     )

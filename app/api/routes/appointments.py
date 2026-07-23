@@ -1,7 +1,7 @@
-# مسیر فایل: backend/app/api/routes/appointments.py
+# backend/app/api/routes/appointments.py
 
 import traceback
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -208,6 +208,9 @@ def execute_booking(
 
         tracking_code = f"DT{uuid4().hex[:16]}"
 
+        # حل مشکل منسوخ شدن datetime.utcnow()
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
         appointment = Appointment(
             patient_id=current_user.id,
             doctor_id=slot.doctor_id,
@@ -215,7 +218,7 @@ def execute_booking(
             status="confirmed",
             tracking_code=tracking_code,
             disclaimer="رزرو آنلاین نوبت",
-            held_at=datetime.utcnow(),
+            held_at=now_utc,
             notes=notes.strip() if notes and notes.strip() else None,
         )
 
@@ -467,6 +470,7 @@ def cancel_appointment(
                 .with_for_update()
                 .first()
             )
+            # بهبود پایداری لغو در صورت نبود رکورد فیزیکی اسلات
             if slot:
                 slot.is_booked = False
                 slot.is_available = True

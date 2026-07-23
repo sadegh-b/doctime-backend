@@ -1,3 +1,4 @@
+# app/models/user.py
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import Boolean, DateTime, String, Integer
@@ -35,7 +36,6 @@ class User(Base):
         nullable=False,
     )
 
-    # فیلد ایمیل اضافه شد - اختیاری است اما اگر وارد شود باید یکتا باشد
     email: Mapped[Optional[str]] = mapped_column(
         String(255),
         unique=True,

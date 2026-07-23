@@ -3,6 +3,48 @@ from sqlalchemy import ForeignKey, Integer, String, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
+
+class Specialty(Base):
+    __tablename__ = "specialties"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    # نام تخصص به فارسی برای نمایش در فرانت‌اند (مثال: قلب و عروق)
+    name: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    # نام انگلیسی برای آدرس‌های URL یا انتخاب آیکون‌ها (مثال: cardiology)
+    slug: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    # توضیحات اختیاری درباره تخصص
+    description: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    # رابطه معکوس با پزشکان
+    doctors = relationship(
+        "Doctor",
+        back_populates="specialty_relation",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Specialty {self.name}>"
+
+
 class Doctor(Base):
     __tablename__ = "doctors"
 
@@ -24,11 +66,13 @@ class Doctor(Base):
         index=True,
     )
 
-    specialty: Mapped[str] = mapped_column(
-        String(120),
+    # تغییر از PROTECT به RESTRICT برای سازگاری کامل با استانداردهای SQL/SQLite
+    specialty_id: Mapped[int] = mapped_column(
+        ForeignKey("specialties.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
+    # فیلد فوق‌تخصص هنوز می‌تواند به صورت متن آزاد یا اختیاری باشد
     sub_specialty: Mapped[str | None] = mapped_column(
         String(120),
         nullable=True,
@@ -88,9 +132,16 @@ class Doctor(Base):
         default="کمتر از نیم ساعت",
     )
 
+    # روابط (Relationships)
     user = relationship(
         "User",
         back_populates="doctor_profile",
+    )
+
+    # اتصال رابطه شی‌گرا به مدل تخصص
+    specialty_relation = relationship(
+        "Specialty",
+        back_populates="doctors",
     )
 
     availabilities = relationship(

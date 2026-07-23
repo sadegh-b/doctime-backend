@@ -1,3 +1,5 @@
+# Path: app/api/routes/auth.py
+
 import logging
 from datetime import date, datetime, time, timedelta
 from typing import Optional
@@ -9,15 +11,13 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.availability import Availability
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, Specialty
 from app.models.user import User
 from app.schemas.auth import TokenResponse, UserLogin, UserResponse
 from app.schemas.user import DoctorOut, UserOut, UserRegister
 
-
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
-
 
 PERSIAN_DAY_TO_WEEKDAY = {
     "دوشنبه": 0,
@@ -124,17 +124,16 @@ def validate_doctor_registration_data(user_data: UserRegister) -> None:
 
 
 def find_existing_user(
-    db: Session, phone: str, national_id: str, email: Optional[str] = None
+        db: Session, phone: str, national_id: str, email: Optional[str] = None
 ) -> Optional[User]:
-    # اگر ایمیل فرستاده شده بود، آن را هم در شرط OR بررسی کن
     filters = (User.phone == phone) | (User.national_id == national_id)
-    if email:
+    if email and email.strip() != "":
         filters = filters | (User.email == email)
     return db.query(User).filter(filters).first()
 
 
 def find_existing_doctor(
-    db: Session, medical_council_number: Optional[str]
+        db: Session, medical_council_number: Optional[str]
 ) -> Optional[Doctor]:
     if not medical_council_number:
         return None
@@ -147,22 +146,24 @@ def find_existing_doctor(
 
 
 def build_user_response(
-    user: User,
-    doctor: Optional[Doctor] = None,
-    message: str = "OK",
-    token: Optional[TokenResponse] = None,
+        user: User,
+        doctor: Optional[Doctor] = None,
+        message: str = "OK",
+        token: Optional[TokenResponse] = None,
 ) -> UserResponse:
     if doctor:
+        specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
+
         user_out = DoctorOut(
             id=user.id,
             name=user.name,
             phone=user.phone,
-            email=user.email,  # ایمیل به خروجی ساختاریافته پزشک پاس داده شد
+            email=user.email,
             role=user.role,
             is_active=user.is_active,
             doctor_id=doctor.id,
             medical_council_number=doctor.medical_council_number,
-            specialty=doctor.specialty,
+            specialty=specialty_name,
             sub_specialty=getattr(doctor, "sub_specialty", None),
             province=getattr(doctor, "province", None),
             city=doctor.city,
@@ -179,7 +180,7 @@ def build_user_response(
             id=user.id,
             name=user.name,
             phone=user.phone,
-            email=user.email,  # ایمیل به خروجی ساختاریافته کاربر عادی پاس داده شد
+            email=user.email,
             role=user.role,
             is_active=user.is_active,
         )
@@ -192,17 +193,24 @@ def build_user_response(
 
 
 def create_access_token_response(user: User) -> TokenResponse:
+    access_token = create_access_token(subject=str(user.id))
     return TokenResponse(
-        access_token=create_access_token(str(user.id), user.role),
+        access_token=access_token,
         token_type="bearer",
     )
 
 
 def create_doctor_profile(db: Session, user: User, user_data: UserRegister) -> Doctor:
+    if not user_data.specialty_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="شناسه تخصص برای ثبت‌نام پزشک الزامی است.",
+        )
+
     doctor = Doctor(
         user_id=user.id,
         medical_council_number=user_data.medical_council_number,
-        specialty=user_data.specialty,
+        specialty_id=user_data.specialty_id,
         sub_specialty=user_data.sub_specialty,
         province=user_data.province,
         city=user_data.city,
@@ -214,18 +222,17 @@ def create_doctor_profile(db: Session, user: User, user_data: UserRegister) -> D
         consultation_fee=user_data.consultation_fee,
         work_shift=user_data.work_shift,
     )
-
     db.add(doctor)
     db.flush()
     return doctor
 
 
 def add_availability_slot(
-    db: Session,
-    doctor_id: int,
-    slot_date: date,
-    start_time: time,
-    end_time: time,
+        db: Session,
+        doctor_id: int,
+        slot_date: date,
+        start_time: time,
+        end_time: time,
 ) -> None:
     availability = Availability(
         doctor_id=doctor_id,
@@ -238,12 +245,12 @@ def add_availability_slot(
 
 
 def create_slots_for_range(
-    db: Session,
-    doctor_id: int,
-    slot_date: date,
-    start_time: time,
-    end_time: time,
-    slot_minutes: int = 30,
+        db: Session,
+        doctor_id: int,
+        slot_date: date,
+        start_time: time,
+        end_time: time,
+        slot_minutes: int = 30,
 ) -> None:
     current_datetime = datetime.combine(slot_date, start_time)
     end_datetime = datetime.combine(slot_date, end_time)
@@ -259,16 +266,15 @@ def create_slots_for_range(
             start_time=slot_start,
             end_time=slot_end,
         )
-
         current_datetime += timedelta(minutes=slot_minutes)
 
 
 def create_doctor_availabilities(
-    db: Session,
-    doctor_id: int,
-    user_data: UserRegister,
-    days_count: int = 30,
-    slot_minutes: int = 30,
+        db: Session,
+        doctor_id: int,
+        user_data: UserRegister,
+        days_count: int = 30,
+        slot_minutes: int = 30,
 ) -> None:
     if user_data.role != "doctor":
         return
@@ -346,7 +352,7 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
         db=db,
         phone=user_data.phone,
         national_id=user_data.national_id,
-        email=user_data.email,  # اضافه کردن چک ایمیل در کوئری
+        email=user_data.email,
     )
 
     if existing_user:
@@ -385,7 +391,7 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
             last_name=last_name,
             national_id=user_data.national_id,
             phone=user_data.phone,
-            email=user_data.email,  # فیلد ایمیل در سازنده مدل دیتابیس ست شد
+            email=user_data.email,
             hashed_password=hash_password(user_data.password),
             role=user_data.role,
             is_active=True,
@@ -428,20 +434,16 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     except IntegrityError as exc:
         db.rollback()
         logger.exception("Registration integrity error: %s", exc)
-
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="اطلاعات وارد شده تکراری است یا با محدودیت‌های دیتابیس سازگار نیست.",
         )
-
     except HTTPException:
         db.rollback()
         raise
-
     except Exception as exc:
         db.rollback()
         logger.exception("Registration error: %s", exc)
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="خطای داخلی سرور هنگام ثبت‌نام.",
@@ -486,11 +488,10 @@ def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserResponse)
 def get_me(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
 ):
     doctor = None
-
     if current_user.role == "doctor":
         doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
 

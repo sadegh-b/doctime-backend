@@ -1,6 +1,6 @@
-# app/api/routes/availability.py
+# Path: app/api/routes/availability.py
 
-from datetime import datetime, timedelta, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,12 +11,10 @@ from app.api.dependencies import get_current_user, get_db
 from app.models.availability import Availability
 from app.models.doctor import Doctor
 from app.models.user import User
-
 from app.schemas.availability import (
     AvailabilityBulkCreateResponse,
     AvailabilityCreate,
 )
-
 
 router = APIRouter(
     prefix="/availability",
@@ -34,10 +32,10 @@ def _time_to_dt(t: dtime) -> datetime:
 def get_doctor(
     db: Session,
     current_user: User
-):
+) -> Doctor:
     if current_user.role != "doctor":
         raise HTTPException(
-            status_code=403,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Only doctors can manage availability"
         )
 
@@ -51,12 +49,11 @@ def get_doctor(
 
     if not doctor:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Doctor profile not found"
         )
 
     return doctor
-
 
 
 @router.post(
@@ -69,58 +66,35 @@ def create_availability(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-
-    doctor = get_doctor(
-        db,
-        current_user
-    )
-
+    doctor = get_doctor(db, current_user)
 
     if payload.end_time <= payload.start_time:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="End time must be greater than start time"
         )
 
-
     if payload.duration_minutes <= 0:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid duration"
         )
 
-
-    start_dt = _time_to_dt(
-        payload.start_time
-    )
-
-    end_dt = _time_to_dt(
-        payload.end_time
-    )
-
-
-    duration = timedelta(
-        minutes=payload.duration_minutes
-    )
-
+    start_dt = _time_to_dt(payload.start_time)
+    end_dt = _time_to_dt(payload.end_time)
+    duration = timedelta(minutes=payload.duration_minutes)
 
     slots = []
-
     cursor = start_dt
 
-
     while cursor + duration <= end_dt:
-
         slots.append(
             (
                 cursor.time(),
                 (cursor + duration).time()
             )
         )
-
         cursor += duration
-
-
 
     existing = (
         db.query(Availability)
@@ -131,87 +105,47 @@ def create_availability(
         .all()
     )
 
+    def overlap(a_start, a_end, b_start, b_end):
+        return a_start < b_end and a_end > b_start
 
-
-    def overlap(
-        a_start,
-        a_end,
-        b_start,
-        b_end
-    ):
-        return (
-            a_start < b_end
-            and
-            a_end > b_start
-        )
-
-
-    for s,e in slots:
-
+    for s, e in slots:
         for old in existing:
-
-            if overlap(
-                s,
-                e,
-                old.start_time,
-                old.end_time
-            ):
+            if overlap(s, e, old.start_time, old.end_time):
                 raise HTTPException(
-                    status_code=400,
+                    status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Slot already exists"
                 )
 
-
-
     try:
-
-        items=[]
-
-
-        for s,e in slots:
-
+        items = []
+        for s, e in slots:
             item = Availability(
                 doctor_id=doctor.id,
                 date=payload.date,
                 start_time=s,
                 end_time=e,
-                is_available=True,
                 is_booked=False
             )
-
             items.append(item)
 
-
-
         db.add_all(items)
-
         db.commit()
-
 
         for item in items:
             db.refresh(item)
 
-
-
         return {
-            "success":True,
-            "count":len(items),
-            "items":items
+            "success": True,
+            "count": len(items),
+            "items": items
         }
 
-
-
-    except SQLAlchemyError:
-
+    except SQLAlchemyError as exc:
         db.rollback()
-
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error"
-        )
-
-
-
+        ) from exc
 
 
 @router.get(
@@ -223,28 +157,18 @@ def get_availability(
     only_available: bool = False,
     db: Session = Depends(get_db)
 ):
-
-
-    query = db.query(
-        Availability
-    )
-
+    query = db.query(Availability)
 
     if doctor_id:
-
         query = query.filter(
             Availability.doctor_id == doctor_id
         )
 
-
     if only_available:
-
+        # فیلتر کردن نوبت‌هایی که رزرو نشده‌اند
         query = query.filter(
-            Availability.is_available == True,
             Availability.is_booked == False
         )
-
-
 
     slots = (
         query
@@ -255,45 +179,18 @@ def get_availability(
         .all()
     )
 
-
-
     return {
-
-        "success":True,
-
-        "count":len(slots),
-
-        "items":[
-
+        "success": True,
+        "count": len(slots),
+        "items": [
             {
-
-                "id":slot.id,
-
-                "doctor_id":slot.doctor_id,
-
-                "date":
-                    slot.date.isoformat(),
-
-                "start_time":
-                    slot.start_time.strftime(
-                        "%H:%M"
-                    ),
-
-                "end_time":
-                    slot.end_time.strftime(
-                        "%H:%M"
-                    ),
-
-                "is_available":
-                    slot.is_available,
-
-                "is_booked":
-                    slot.is_booked
-
+                "id": slot.id,
+                "doctor_id": slot.doctor_id,
+                "date": slot.date.isoformat(),
+                "start_time": slot.start_time.strftime("%H:%M"),
+                "end_time": slot.end_time.strftime("%H:%M"),
+                "is_booked": slot.is_booked
             }
-
             for slot in slots
-
         ]
-
     }

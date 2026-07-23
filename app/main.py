@@ -63,7 +63,7 @@ app = FastAPI(
 )
 
 # -----------------------------------------------------------------------------
-# CORS
+# CORS Configuration (اصلاح شده برای رفع کامل خطای مرورگر)
 # -----------------------------------------------------------------------------
 
 allowed_origins = [
@@ -73,19 +73,16 @@ allowed_origins = [
 ]
 
 frontend_url = getenv("FRONTEND_URL", "").strip().rstrip("/")
-
 if frontend_url and frontend_url not in allowed_origins:
     allowed_origins.append(frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_origin_regex=r"^https://doctime-frontend[a-zA-Z0-9-]*\.vercel\.app$",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # استفاده از "*" برای اجازه به تمامی متدها شامل OPTIONS
+    allow_headers=["*"],  # اجازه به تمامی هدرها شامل Authorization
 )
-
 
 # -----------------------------------------------------------------------------
 # Root / Health
