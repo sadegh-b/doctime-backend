@@ -1,4 +1,5 @@
-# app/models/appointment.py
+# مسیر فایل: backend/app/models/appointment.py
+
 from datetime import datetime, timezone
 import random
 from sqlalchemy import DateTime, ForeignKey, Integer, String
@@ -27,16 +28,16 @@ class Appointment(Base):
         nullable=False,
     )
 
+    # قید unique=True برداشته شد تا امکان ثبت نوبت جدید پس از لغو نوبت قبلی روی همین اسلات فراهم شود.
     availability_id: Mapped[int] = mapped_column(
         ForeignKey("availabilities.id", ondelete="CASCADE"),
-        unique=True,
         nullable=False,
     )
 
     status: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
-        default="pending",  # pending (موقت), confirmed (تایید شده/پرداخت شده), cancelled (لغو شده), completed (انجام شده)
+        default="pending",  # pending, confirmed, cancelled, completed
     )
 
     tracking_code: Mapped[str] = mapped_column(
@@ -57,7 +58,6 @@ class Appointment(Base):
         default="زمان نوبت اعلام شده، برای حضور در مرکز درمانی بوده و با زمان ویزیت تفاوت دارد.",
     )
 
-    # برای مدیریت تایم‌اوت ۱۰ دقیقه‌ای رزرو موقت
     held_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -76,7 +76,8 @@ class Appointment(Base):
         foreign_keys=[doctor_id],
     )
 
+    # تنظیم رابطه به صورت بک‌پاپولیت با appointments در مدل Availability
     availability = relationship(
         "Availability",
-        back_populates="appointment",
+        back_populates="appointments",
     )

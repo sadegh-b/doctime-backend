@@ -1,4 +1,5 @@
-# app/models/availability.py
+# مسیر فایل: backend/app/models/availability.py
+
 from datetime import date, time
 from sqlalchemy import Boolean, Date, ForeignKey, Integer, Time
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -50,8 +51,9 @@ class Availability(Base):
         back_populates="availabilities",
     )
 
-    appointment = relationship(
+    # تغییر نام به حالت جمع (appointments) و حذف uselist=False
+    # چون هر اسلات می‌تواند تاریخچه‌ای از نوبت‌های لغوشده و نهایتاً یک نوبت فعال داشته باشد.
+    appointments = relationship(
         "Appointment",
         back_populates="availability",
-        uselist=False,
     )
