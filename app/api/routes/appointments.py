@@ -1,4 +1,4 @@
-# backend/app/api/routes/appointments.py
+# Path: backend/app/api/routes/appointments.py
 
 import traceback
 from datetime import date, timedelta, datetime, timezone
@@ -383,11 +383,13 @@ def get_my_appointments(
             detail="فقط بیمار دسترسی دارد."
         )
 
+    # اضافه کردن joinedload برای تخصیص رابطه تخصص پزشک به صورت همزمان
     appointments = (
         db.query(Appointment)
         .options(
             joinedload(Appointment.availability),
             joinedload(Appointment.doctor).joinedload(Doctor.user),
+            joinedload(Appointment.doctor).joinedload(Doctor.specialty_relation),
         )
         .filter(Appointment.patient_id == current_user.id)
         .order_by(Appointment.id.desc())
@@ -400,12 +402,19 @@ def get_my_appointments(
         availability = appointment.availability
         doctor = appointment.doctor
 
+        # استخراج نام تخصص از رابطه شیء به جای صفت مستقیم نا‌موجود
+        doctor_specialty_name = (
+            doctor.specialty_relation.name 
+            if doctor and doctor.specialty_relation 
+            else "نامشخص"
+        )
+
         items.append(
             {
                 "id": appointment.id,
                 "status": appointment.status,
                 "doctor_name": (doctor.user.name if doctor and doctor.user else "Unknown"),
-                "doctor_specialty": (doctor.specialty if doctor else None),
+                "doctor_specialty": doctor_specialty_name,
                 "date": (availability.date.isoformat() if availability else None),
                 "start_time": (availability.start_time.strftime("%H:%M") if availability else None),
                 "end_time": (availability.end_time.strftime("%H:%M") if availability else None),
@@ -554,6 +563,7 @@ def get_all_appointments_filtered(
         .options(
             joinedload(Appointment.availability),
             joinedload(Appointment.doctor).joinedload(Doctor.user),
+            joinedload(Appointment.doctor).joinedload(Doctor.specialty_relation),
             joinedload(Appointment.patient),
         )
     )
@@ -573,13 +583,20 @@ def get_all_appointments_filtered(
     items = []
 
     for item in appointments:
+        # استخراج نام تخصص پزشک در این بخش نیز اصلاح شد
+        doctor_specialty_name = (
+            item.doctor.specialty_relation.name 
+            if item.doctor and item.doctor.specialty_relation 
+            else "نامشخص"
+        )
+
         items.append(
             {
                 "id": item.id,
                 "status": item.status,
                 "patient_name": (item.patient.name if item.patient else "Unknown"),
                 "doctor_name": (item.doctor.user.name if item.doctor and item.doctor.user else "Unknown"),
-                "doctor_specialty": (item.doctor.specialty if item.doctor else None),
+                "doctor_specialty": doctor_specialty_name,
                 "date": (item.availability.date.isoformat() if item.availability else None),
                 "start_time": (item.availability.start_time.strftime("%H:%M") if item.availability else None),
                 "end_time": (item.availability.end_time.strftime("%H:%M") if item.availability else None),

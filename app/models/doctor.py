@@ -66,10 +66,11 @@ class Doctor(Base):
         index=True,
     )
 
-    # تغییر از PROTECT به RESTRICT برای سازگاری کامل با استانداردهای SQL/SQLite
+    # اصلاحیه: اضافه شدن index=True برای بهینه‌سازی جستجو بر اساس تخصص
     specialty_id: Mapped[int] = mapped_column(
         ForeignKey("specialties.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
     )
 
     # فیلد فوق‌تخصص هنوز می‌تواند به صورت متن آزاد یا اختیاری باشد

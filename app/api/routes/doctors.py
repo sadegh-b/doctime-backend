@@ -1,4 +1,4 @@
-# Path: app/api/routes/doctors.py
+# Path: backend/app/api/routes/doctors.py
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
@@ -50,7 +50,7 @@ def get_doctor_profile_or_404(
     if doctor is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor profile not found",
+            detail="پروفایل پزشک یافت نشد.",
         )
 
     return doctor
@@ -60,14 +60,17 @@ def build_doctor_profile_response(
     doctor: Doctor,
     user: User,
 ) -> DoctorProfileResponse:
+    # اصلاح شد: استخراج ایمن نام و شناسه تخصص
     specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
+    specialty_id = doctor.specialty_id
     return DoctorProfileResponse(
         id=user.id,
         name=user.name,
         phone=user.phone,
         email=getattr(user, "email", None),
         role=user.role,
-        specialty=specialty_name,
+        specialty_id=specialty_id,
+        specialty_name=specialty_name,
         work_shift=doctor.work_shift,
         city=doctor.city,
         address=doctor.address,
@@ -80,12 +83,15 @@ def build_doctor_profile_response(
 def build_doctor_list_item(
     doctor: Doctor,
 ) -> DoctorListItem:
+    # اصلاح شد: استخراج ایمن نام و شناسه تخصص
     specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
+    specialty_id = doctor.specialty_id
     return DoctorListItem(
         id=doctor.id,
         user_id=doctor.user_id,
         name=doctor.user.name if doctor.user else None,
-        specialty=specialty_name,
+        specialty_id=specialty_id,
+        specialty_name=specialty_name,
         work_shift=doctor.work_shift,
         city=doctor.city,
         address=doctor.address,
@@ -108,7 +114,7 @@ def create_doctor_profile(
     if current_user.role != "doctor":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only doctors can create a doctor profile",
+            detail="فقط پزشکان مجاز به ساخت پروفایل هستند.",
         )
 
     existing_doctor = (
@@ -120,14 +126,12 @@ def create_doctor_profile(
     if existing_doctor is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Doctor profile already exists",
+            detail="پروفایل پزشک پیش از این ساخته شده است.",
         )
-
-    specialty_obj = get_or_create_specialty(db, payload.specialty or "عمومی")
 
     doctor = Doctor(
         user_id=current_user.id,
-        specialty_id=specialty_obj.id,
+        specialty_id=payload.specialty_id,
         work_shift=payload.work_shift,
         city=payload.city,
         address=payload.address,
@@ -144,7 +148,7 @@ def create_doctor_profile(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error while creating doctor profile",
+            detail="خطای دیتابیس در هنگام ثبت پروفایل پزشک",
         ) from exc
 
     return {
@@ -164,7 +168,7 @@ def get_my_doctor_profile(
     if current_user.role != "doctor":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only doctors can access a doctor profile",
+            detail="تنها پزشک به این اطلاعات دسترسی دارد.",
         )
 
     doctor = get_doctor_profile_or_404(
@@ -193,7 +197,7 @@ def update_my_doctor_profile(
     if current_user.role != "doctor":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only doctors can update a doctor profile",
+            detail="تنها پزشک می‌تواند پروفایل خود را بروزرسانی کند.",
         )
 
     doctor = get_doctor_profile_or_404(
@@ -205,11 +209,6 @@ def update_my_doctor_profile(
 
     if "name" in update_data:
         current_user.name = update_data.pop("name")
-
-    if "specialty" in update_data:
-        specialty_val = update_data.pop("specialty")
-        specialty_obj = get_or_create_specialty(db, specialty_val)
-        doctor.specialty_id = specialty_obj.id
 
     for field_name, field_value in update_data.items():
         setattr(doctor, field_name, field_value)
@@ -225,7 +224,7 @@ def update_my_doctor_profile(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error while updating doctor profile",
+            detail="خطای دیتابیس هنگام بروزرسانی پروفایل",
         ) from exc
 
     return {
@@ -335,7 +334,7 @@ def get_doctor_by_id(
     if doctor is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor not found",
+            detail="پزشک پیدا نشد.",
         )
 
     return {
