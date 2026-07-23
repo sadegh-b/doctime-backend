@@ -9,13 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 # ایمپورت کردن بیس دیتابیس برای ساختن جدول‌ها
 from app.database.base import Base, engine
 
-# ایمپورت دقیق مدل‌ها برای شناسایی توسط metadata
+# ایمپورت دقیق مدل‌هایی که وجود آن‌ها قطعی است
 from app.models.user import User  # noqa: F401
 from app.models.doctor import Doctor  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
 
-# توجه: اگر مدل‌های Appointment یا Review با نام دیگری هستند یا وجود ندارند،
-# به صورت try-except ایمپورت می‌کنیم تا سرور کرش نکند.
+# مدل‌های زیر را با try-except لود می‌کنیم تا در صورت عدم وجود فیزیکی فایل، سرور کرش نکند
 try:
     from app.models.appointment import Appointment  # noqa: F401
 except ImportError:
@@ -146,7 +145,7 @@ app.include_router(reviews_router, prefix=API_PREFIX)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # ساختن تمام جدول‌ها در دیتابیس نو بنیاد
+    # ساختن تمام جدول‌ها در دیتابیس جدید
     logger.info("Creating database tables if not exist...")
     Base.metadata.create_all(bind=engine)
 
