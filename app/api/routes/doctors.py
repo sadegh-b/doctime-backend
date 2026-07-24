@@ -1,4 +1,4 @@
-# Path: app/api/routes/doctors.py
+# Path: backend/app/api/routes/doctors.py
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
@@ -214,7 +214,7 @@ def list_doctors(db: Session = Depends(get_db)):
     items = [build_doctor_list_item(doctor) for doctor in doctors]
     return {"success": True, "count": len(items), "items": items}
 
-@router.get("/{doctor_id}", response_model=DoctorCreateResponse)
+@router.get("/{doctor_id}", response_model=DoctorProfileApiResponse)
 def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
     doctor = (
         db.query(Doctor)
@@ -225,4 +225,10 @@ def get_doctor_by_id(doctor_id: int, db: Session = Depends(get_db)):
     if not doctor:
         raise HTTPException(status_code=404, detail="پزشک یافت نشد.")
 
-    return {"success": True, "data": DoctorResponse.model_validate(doctor)}
+    if not doctor.user:
+        raise HTTPException(status_code=500, detail="اطلاعات کاربری پزشک مفقود است.")
+
+    return {
+        "success": True,
+        "data": build_doctor_profile_response(doctor=doctor, user=doctor.user),
+    }
