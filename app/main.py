@@ -6,15 +6,17 @@ from os import getenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ایمپورت کردن بیس دیتابیس برای ساختن جدول‌ها
-from app.database.base import Base, engine
+# Database base for creating tables
+from app.database import Base, engine  # اصلاح آدرس ایمپورت بیس دیتابیس
 
-# ایمپورت دقیق مدل‌هایی که وجود آن‌ها قطعی است
+# Import models that definitely exist
 from app.models.user import User  # noqa: F401
 from app.models.doctor import Doctor  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
+# صادق: در اینجا کلاس به ConsultationRequest تغییر یافت تا خطای ایمپورت برطرف شود
+from app.models.consultation import ConsultationRequest  # noqa: F401
 
-# مدل‌های زیر را با try-except لود می‌کنیم تا در صورت عدم وجود فیزیکی فایل، سرور کرش نکند
+# Load optional models safely
 try:
     from app.models.appointment import Appointment  # noqa: F401
 except ImportError:
@@ -25,12 +27,13 @@ try:
 except ImportError:
     pass
 
-# ایمپورت راوترها
+# Routers
 from app.api.routes.appointments import router as appointments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
 from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
+from app.api.routes.consultations import router as consultations_router
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -63,7 +66,7 @@ app = FastAPI(
 )
 
 # -----------------------------------------------------------------------------
-# CORS Configuration (اصلاح شده برای رفع کامل خطای مرورگر)
+# CORS Configuration
 # -----------------------------------------------------------------------------
 
 allowed_origins = [
@@ -80,8 +83,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # استفاده از "*" برای اجازه به تمامی متدها شامل OPTIONS
-    allow_headers=["*"],  # اجازه به تمامی هدرها شامل Authorization
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # -----------------------------------------------------------------------------
@@ -124,7 +127,6 @@ def api_v1_root() -> dict[str, str]:
         "api_version": "v1",
     }
 
-
 # -----------------------------------------------------------------------------
 # Routers
 # -----------------------------------------------------------------------------
@@ -134,7 +136,7 @@ app.include_router(doctors_router, prefix=API_PREFIX)
 app.include_router(appointments_router, prefix=API_PREFIX)
 app.include_router(availability_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
-
+app.include_router(consultations_router, prefix=API_PREFIX)
 
 # -----------------------------------------------------------------------------
 # Lifecycle
@@ -142,8 +144,8 @@ app.include_router(reviews_router, prefix=API_PREFIX)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # ساختن تمام جدول‌ها در دیتابیس جدید
     logger.info("Creating database tables if not exist...")
+    # متادیتای تمام جداول ایمپورت شده ساخته می‌شود (از جمله جدول جدید consultation_requests)
     Base.metadata.create_all(bind=engine)
 
     logger.info("DocTime API started successfully.")
