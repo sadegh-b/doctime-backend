@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import jdatetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import and_
 from sqlalchemy.orm import Session, joinedload
 
@@ -52,6 +52,7 @@ JALALI_MONTHS = [
     "اسفند",
 ]
 
+
 # ==========================
 # Schemas
 # ==========================
@@ -60,12 +61,14 @@ class AppointmentCreate(BaseModel):
     availability_id: int
     notes: str | None = None
 
+
 class SlotDetailOut(BaseModel):
     slot_id: int
     start_time: str
     end_time: str
     is_available: bool
     is_booked: bool
+
 
 class DailyScheduleOut(BaseModel):
     date: str
@@ -74,10 +77,12 @@ class DailyScheduleOut(BaseModel):
     persian_day_name: str
     slots: List[SlotDetailOut]
 
+
 class DoctorScheduleResponse(BaseModel):
     success: bool
     doctor_id: int
     schedule: List[DailyScheduleOut]
+
 
 # ==========================
 # Helpers
@@ -89,23 +94,28 @@ def convert_to_jalali_details(gregorian_date: date):
     text = f"{j_date.year} {JALALI_MONTHS[j_date.month - 1]} {j_date.day}"
     return numeric, text
 
+
 def get_current_doctor_profile(db: Session, current_user: User):
     if current_user.role != "doctor":
         raise HTTPException(
             status_code=403,
             detail="فقط پزشک دسترسی دارد."
         )
+
     doctor = (
         db.query(Doctor)
         .filter(Doctor.user_id == current_user.id)
         .first()
     )
+
     if not doctor:
         raise HTTPException(
             status_code=404,
             detail="پروفایل پزشک پیدا نشد."
         )
+
     return doctor
+
 
 def get_locked_appointment(db: Session, appointment_id: int):
     appointment = (
@@ -114,12 +124,15 @@ def get_locked_appointment(db: Session, appointment_id: int):
         .with_for_update()
         .first()
     )
+
     if not appointment:
         raise HTTPException(
             status_code=404,
             detail="نوبت پیدا نشد."
         )
+
     return appointment
+
 
 # ==========================
 # Booking Core
@@ -144,7 +157,6 @@ def execute_booking(
         )
 
     try:
-        # قفل‌کردن اسلات برای جلوگیری از ثبت همزمان دو بیمار (Race Conditions)
         slot = (
             db.query(Availability)
             .filter(Availability.id == slot_id)
@@ -184,7 +196,6 @@ def execute_booking(
                 detail="پزشک پیدا نشد.",
             )
 
-        # جلوگیری از داشتن دو نوبت فعال برای یک بیمار نزد یک پزشک در یک روز
         duplicate = (
             db.query(Appointment)
             .join(
@@ -207,8 +218,6 @@ def execute_booking(
             )
 
         tracking_code = f"DT{uuid4().hex[:16]}"
-
-        # حل مشکل منسوخ شدن datetime.utcnow()
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
 
         appointment = Appointment(
@@ -252,6 +261,7 @@ def execute_booking(
             status_code=500,
             detail="خطای داخلی هنگام رزرو نوبت در دیتابیس.",
         )
+
 
 # ==========================
 # Endpoints
@@ -317,9 +327,6 @@ def get_doctor_schedule_grid(
         "schedule": schedule,
     }
 
-# ==========================
-# Create Appointment (POST /api/v1/appointments)
-# ==========================
 
 @router.post(
     "",
@@ -348,6 +355,7 @@ def create_appointment(
         "appointment_id": appointment.id
     }
 
+
 @router.post(
     "/book/{slot_id}",
     status_code=status.HTTP_201_CREATED
@@ -368,6 +376,7 @@ def book_appointment_quick(
         "appointment_id": appointment.id
     }
 
+
 # ==========================
 # Patient Appointments
 # ==========================
@@ -383,7 +392,6 @@ def get_my_appointments(
             detail="فقط بیمار دسترسی دارد."
         )
 
-    # اضافه کردن joinedload برای تخصیص رابطه تخصص پزشک به صورت همزمان
     appointments = (
         db.query(Appointment)
         .options(
@@ -402,22 +410,25 @@ def get_my_appointments(
         availability = appointment.availability
         doctor = appointment.doctor
 
-        # استخراج نام تخصص از رابطه شیء به جای صفت مستقیم نا‌موجود
         doctor_specialty_name = (
-            doctor.specialty_relation.name 
-            if doctor and doctor.specialty_relation 
-            else "نامشخص"
+            doctor.specialty_relation.name
+            if doctor and doctor.specialty_relation
+            else None
         )
 
         items.append(
             {
                 "id": appointment.id,
                 "status": appointment.status,
-                "doctor_name": (doctor.user.name if doctor and doctor.user else "Unknown"),
+                "doctor_name": (
+                    doctor.user.name
+                    if doctor and doctor.user and doctor.user.name
+                    else "Unknown"
+                ),
                 "doctor_specialty": doctor_specialty_name,
-                "date": (availability.date.isoformat() if availability else None),
-                "start_time": (availability.start_time.strftime("%H:%M") if availability else None),
-                "end_time": (availability.end_time.strftime("%H:%M") if availability else None),
+                "date": availability.date.isoformat() if availability else None,
+                "start_time": availability.start_time.strftime("%H:%M") if availability else None,
+                "end_time": availability.end_time.strftime("%H:%M") if availability else None,
                 "notes": appointment.notes,
             }
         )
@@ -426,6 +437,7 @@ def get_my_appointments(
         "success": True,
         "items": items
     }
+
 
 # ==========================
 # Cancel Appointment
@@ -479,7 +491,7 @@ def cancel_appointment(
                 .with_for_update()
                 .first()
             )
-            # بهبود پایداری لغو در صورت نبود رکورد فیزیکی اسلات
+
             if slot:
                 slot.is_booked = False
                 slot.is_available = True
@@ -506,6 +518,7 @@ def cancel_appointment(
             status_code=500,
             detail="خطا در فرآیند لغو نوبت در سرور.",
         )
+
 
 # ==========================
 # Complete Appointment
@@ -548,6 +561,7 @@ def complete_appointment(
         "status": appointment.status
     }
 
+
 # ==========================
 # All Appointments
 # ==========================
@@ -583,23 +597,36 @@ def get_all_appointments_filtered(
     items = []
 
     for item in appointments:
-        # استخراج نام تخصص پزشک در این بخش نیز اصلاح شد
+        if item.doctor and not item.doctor.specialty_relation:
+            raise HTTPException(
+                status_code=500,
+                detail="Doctor specialty relation is missing."
+            )
+
         doctor_specialty_name = (
-            item.doctor.specialty_relation.name 
-            if item.doctor and item.doctor.specialty_relation 
-            else "نامشخص"
+            item.doctor.specialty_relation.name
+            if item.doctor and item.doctor.specialty_relation
+            else None
         )
 
         items.append(
             {
                 "id": item.id,
                 "status": item.status,
-                "patient_name": (item.patient.name if item.patient else "Unknown"),
-                "doctor_name": (item.doctor.user.name if item.doctor and item.doctor.user else "Unknown"),
+                "patient_name": (
+                    item.patient.name
+                    if item.patient and item.patient.name
+                    else "Unknown"
+                ),
+                "doctor_name": (
+                    item.doctor.user.name
+                    if item.doctor and item.doctor.user and item.doctor.user.name
+                    else "Unknown"
+                ),
                 "doctor_specialty": doctor_specialty_name,
-                "date": (item.availability.date.isoformat() if item.availability else None),
-                "start_time": (item.availability.start_time.strftime("%H:%M") if item.availability else None),
-                "end_time": (item.availability.end_time.strftime("%H:%M") if item.availability else None),
+                "date": item.availability.date.isoformat() if item.availability else None,
+                "start_time": item.availability.start_time.strftime("%H:%M") if item.availability else None,
+                "end_time": item.availability.end_time.strftime("%H:%M") if item.availability else None,
             }
         )
 
