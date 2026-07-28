@@ -33,7 +33,7 @@ from app.api.routes.availability import router as availability_router
 from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
 from app.api.routes.consultations import router as consultations_router
-from app.api.routes.specialties import router as specialties_router  # صادق: این ایمپورت اضافه شد
+from app.api.routes.specialties import router as specialties_router
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -53,16 +53,16 @@ logger = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
 
 # -----------------------------------------------------------------------------
-# App
+# App (Swagger endpoints moved under API_PREFIX)
 # -----------------------------------------------------------------------------
 
 app = FastAPI(
     title="DocTime API",
     description="Doctor Appointment Management System",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=f"{API_PREFIX}/docs",          # اصلاح شد: انتقال مستندات به پیشوند ورژن ۱
+    redoc_url=f"{API_PREFIX}/redoc",        # اصلاح شد
+    openapi_url=f"{API_PREFIX}/openapi.json",  # اصلاح شد
 )
 
 # -----------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def root() -> dict[str, str]:
         "status": "online",
         "message": "DocTime API is running successfully",
         "version": "1.0.0",
-        "docs": "/docs",
+        "docs": f"{API_PREFIX}/docs",  # اصلاح شد
     }
 
 
@@ -133,7 +133,7 @@ def api_v1_root() -> dict[str, str]:
 
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(doctors_router, prefix=API_PREFIX)
-app.include_router(specialties_router, prefix=API_PREFIX)  # صادق: این روت جدید در اینجا ثبت شد
+app.include_router(specialties_router, prefix=API_PREFIX)
 app.include_router(appointments_router, prefix=API_PREFIX)
 app.include_router(availability_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
