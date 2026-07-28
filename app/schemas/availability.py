@@ -1,32 +1,20 @@
-# app/schemas/availability.py
-from datetime import date, time
-from pydantic import BaseModel, Field
+# Path: backend/app/schemas/availability.py
 
+from datetime import date, time
+from pydantic import BaseModel, ConfigDict, Field
 
 class AvailabilityCreate(BaseModel):
     date: date
     start_time: time
     end_time: time
-    duration_minutes: int = Field(default=15, ge=5, le=240)
+    duration_minutes: int = Field(default=30, ge=15, le=120)  # انتخاب بازه‌های ۱۵، ۳۰، ۴۵، ۶۰ و ...
 
-    # English tip:
-    # duration_minutes -> "duration" یعنی "مدت زمان"
-    # Field constraints: ge=... (greater or equal) / le=... (less or equal)
-
-
-class AvailabilityResponse(BaseModel):
-    id: int
-    doctor_id: int
-    date: date
-    start_time: time
-    end_time: time
-    is_available: bool
-    is_booked: bool
-
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AvailabilityBulkCreateResponse(BaseModel):
     success: bool
     count: int
-    items: list[AvailabilityResponse]
+    items: list
+
+    model_config = ConfigDict(from_attributes=True)

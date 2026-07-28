@@ -1,15 +1,22 @@
-# app/api/routes/__init__.py
+# Path: app/api/routes/__init__.py
 
-from . import auth
-from . import doctors
-from . import availability
-from . import appointments
-from . import reviews
+from fastapi import APIRouter
+from app.api.routes import (
+    auth,
+    doctors,
+    appointments,
+    availability,
+    reviews,
+    consultations,
+    specialties
+)
 
-__all__ = [
-    "auth",
-    "doctors",
-    "availability",
-    "appointments",
-    "reviews",
-]
+api_router = APIRouter()
+
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(doctors.router, prefix="/doctors", tags=["doctors"])
+api_router.include_router(specialties.router, prefix="/specialties", tags=["specialties"])
+api_router.include_router(appointments.router, prefix="/appointments", tags=["appointments"])
+api_router.include_router(availability.router, prefix="/availability", tags=["availability"])
+api_router.include_router(reviews.router, prefix="/reviews", tags=["reviews"])
+api_router.include_router(consultations.router, prefix="/consultations", tags=["consultations"])

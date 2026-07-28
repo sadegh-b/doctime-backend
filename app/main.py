@@ -1,4 +1,4 @@
-# app/main.py
+# Path: app/main.py
 
 import logging
 from os import getenv
@@ -7,13 +7,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Database base for creating tables
-from app.database import Base, engine  # اصلاح آدرس ایمپورت بیس دیتابیس
+from app.database import Base, engine
 
 # Import models that definitely exist
 from app.models.user import User  # noqa: F401
 from app.models.doctor import Doctor  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
-# صادق: در اینجا کلاس به ConsultationRequest تغییر یافت تا خطای ایمپورت برطرف شود
 from app.models.consultation import ConsultationRequest  # noqa: F401
 
 # Load optional models safely
@@ -34,6 +33,7 @@ from app.api.routes.availability import router as availability_router
 from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
 from app.api.routes.consultations import router as consultations_router
+from app.api.routes.specialties import router as specialties_router  # صادق: این ایمپورت اضافه شد
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -133,6 +133,7 @@ def api_v1_root() -> dict[str, str]:
 
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(doctors_router, prefix=API_PREFIX)
+app.include_router(specialties_router, prefix=API_PREFIX)  # صادق: این روت جدید در اینجا ثبت شد
 app.include_router(appointments_router, prefix=API_PREFIX)
 app.include_router(availability_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
@@ -145,7 +146,6 @@ app.include_router(consultations_router, prefix=API_PREFIX)
 @app.on_event("startup")
 def on_startup() -> None:
     logger.info("Creating database tables if not exist...")
-    # متادیتای تمام جداول ایمپورت شده ساخته می‌شود (از جمله جدول جدید consultation_requests)
     Base.metadata.create_all(bind=engine)
 
     logger.info("DocTime API started successfully.")
