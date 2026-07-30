@@ -29,11 +29,12 @@ class User(Base):
         nullable=False,
     )
 
-    national_id: Mapped[str] = mapped_column(
+    # تغییر به nullable=True برای پشتیبانی از ثبت‌نام بیماران بدون کد ملی
+    national_id: Mapped[Optional[str]] = mapped_column(
         String(10),
         unique=True,
         index=True,
-        nullable=False,
+        nullable=True,
     )
 
     email: Mapped[Optional[str]] = mapped_column(

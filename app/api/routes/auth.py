@@ -1,3 +1,5 @@
+# app/api/routes/auth.py
+
 import logging
 import random
 from datetime import date, datetime, time, timedelta, timezone
@@ -229,10 +231,7 @@ def create_doctor_availabilities(
 
 @router.post("/otp/send", status_code=status.HTTP_200_OK)
 def send_otp(payload: OTPRequest, db: Session = Depends(get_db)):
-    # تولید کد 6 رقمی استاندارد
     code = f"{random.randint(100000, 999999)}"
-
-    # UTC-aware برای جلوگیری از mismatch بین naive/aware datetime
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
 
     db.query(OTPVerification).filter(
@@ -271,8 +270,6 @@ def register_user(
     db: Session = Depends(get_db)
 ):
     validate_doctor_registration_data(user_data)
-
-    # UTC-aware برای مقایسه صحیح با expires_at
     now = datetime.now(timezone.utc)
 
     otp_record = db.query(OTPVerification).filter(
@@ -297,7 +294,10 @@ def register_user(
             detail="کد تایید منقضی شده است."
         )
 
-    filters = (User.phone == user_data.phone) | (User.national_id == user_data.national_id)
+    # اصلاح منطق شرط‌ها برای جلوگیری از بروز خطا در صورت وجود None
+    filters = (User.phone == user_data.phone)
+    if user_data.national_id and user_data.national_id.strip() != "":
+        filters = filters | (User.national_id == user_data.national_id)
     if user_data.email and user_data.email.strip() != "":
         filters = filters | (User.email == user_data.email)
 
@@ -305,13 +305,18 @@ def register_user(
     if existing_user:
         if existing_user.phone == user_data.phone:
             detail = "این شماره موبایل قبلاً ثبت شده است."
-        elif existing_user.national_id == user_data.national_id:
+        elif user_data.national_id and existing_user.national_id == user_data.national_id:
             detail = "این کد ملی قبلاً ثبت شده است."
         else:
             detail = "این ایمیل قبلاً ثبت شده است."
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     if user_data.role == "doctor":
+        if not user_data.national_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="کد ملی برای پزشکان الزامی است."
+            )
         if db.query(Doctor).filter(
             Doctor.medical_council_number == user_data.medical_council_number
         ).first():
@@ -327,9 +332,9 @@ def register_user(
             name=user_data.name,
             first_name=first_name,
             last_name=last_name,
-            national_id=user_data.national_id,
+            national_id=user_data.national_id if user_data.national_id and user_data.national_id.strip() != "" else None,
             phone=user_data.phone,
-            email=user_data.email,
+            email=user_data.email if user_data.email and user_data.email.strip() != "" else None,
             hashed_password=hash_password(user_data.password),
             role=user_data.role,
             is_active=True,

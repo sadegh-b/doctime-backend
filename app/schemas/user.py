@@ -75,13 +75,14 @@ class UserRegister(BaseModel):
     name: str
     phone: str
     password: str
-    national_id: str
+    # تغییر به اختیاری بودن در سطح ورودی
+    national_id: Optional[str] = None
     email: Optional[str] = None
 
     role: UserRole = "patient"
 
     medical_council_number: Optional[str] = None
-    specialty_id: Optional[int] = None  # تغییر فیلد متنی به شناسه عددی تخصص
+    specialty_id: Optional[int] = None  
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -126,8 +127,12 @@ class UserRegister(BaseModel):
 
     @field_validator("national_id")
     @classmethod
-    def validate_national_id(cls, value: str) -> str:
+    def validate_national_id(cls, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
         value = normalize_digits(value.strip())
+        if value == "":
+            return None
         if not is_valid_iranian_national_id(value):
             raise ValueError("کد ملی معتبر نیست.")
         return value
@@ -230,6 +235,10 @@ class UserRegister(BaseModel):
         if self.role != "doctor":
             return self
 
+        # کد ملی برای پزشک اجباری است
+        if not self.national_id:
+            raise ValueError("کد ملی برای پزشک الزامی است.")
+
         if not self.medical_council_number:
             raise ValueError("کد نظام پزشکی برای پزشک الزامی است.")
 
@@ -283,8 +292,8 @@ class DoctorOut(BaseModel):
 
     doctor_id: Optional[int] = None
     medical_council_number: Optional[str] = None
-    specialty_id: Optional[int] = None  # اضافه شدن شناسه تخصص
-    specialty: Optional[str] = None  # نام متنی تخصص برای نمایش در فرانت‌اند
+    specialty_id: Optional[int] = None  
+    specialty: Optional[str] = None  
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -339,7 +348,7 @@ class UserUpdate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
-    specialty_id: Optional[int] = None  # تغییر فیلد متنی به شناسه عددی تخصص
+    specialty_id: Optional[int] = None  
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
