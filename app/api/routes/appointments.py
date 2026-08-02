@@ -386,57 +386,72 @@ def get_my_appointments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role != "patient":
-        raise HTTPException(
-            status_code=403,
-            detail="فقط بیمار دسترسی دارد."
+    try:
+        if current_user.role != "patient":
+            raise HTTPException(
+                status_code=403,
+                detail="فقط بیمار دسترسی دارد."
+            )
+
+        appointments = (
+            db.query(Appointment)
+            .options(
+                joinedload(Appointment.availability),
+                joinedload(Appointment.doctor)
+                .joinedload(Doctor.user),
+            )
+            .filter(
+                Appointment.patient_id == current_user.id
+            )
+            .order_by(Appointment.id.desc())
+            .all()
         )
 
-    appointments = (
-        db.query(Appointment)
-        .options(
-            joinedload(Appointment.availability),
-            joinedload(Appointment.doctor).joinedload(Doctor.user),
-            joinedload(Appointment.doctor).joinedload(Doctor.specialty_relation),
-        )
-        .filter(Appointment.patient_id == current_user.id)
-        .order_by(Appointment.id.desc())
-        .all()
-    )
+        items = []
 
-    items = []
+        for appointment in appointments:
+            availability = appointment.availability
+            doctor = appointment.doctor
 
-    for appointment in appointments:
-        availability = appointment.availability
-        doctor = appointment.doctor
-
-        doctor_specialty_name = (
-            doctor.specialty_relation.name
-            if doctor and doctor.specialty_relation
-            else None
-        )
-
-        items.append(
-            {
+            items.append({
                 "id": appointment.id,
                 "status": appointment.status,
                 "doctor_name": (
                     doctor.user.name
-                    if doctor and doctor.user and doctor.user.name
-                    else "Unknown"
+                    if doctor and doctor.user
+                    else "نامشخص"
                 ),
-                "doctor_specialty": doctor_specialty_name,
-                "date": availability.date.isoformat() if availability else None,
-                "start_time": availability.start_time.strftime("%H:%M") if availability else None,
-                "end_time": availability.end_time.strftime("%H:%M") if availability else None,
+                "date": (
+                    availability.date.isoformat()
+                    if availability else None
+                ),
+                "start_time": (
+                    availability.start_time.strftime("%H:%M")
+                    if availability else None
+                ),
+                "end_time": (
+                    availability.end_time.strftime("%H:%M")
+                    if availability else None
+                ),
                 "notes": appointment.notes,
-            }
-        )
+            })
 
-    return {
-        "success": True,
-        "items": items
-    }
+        return {
+            "success": True,
+            "items": items
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        print("APPOINTMENTS ME ERROR:", repr(e))
+        traceback.print_exc()
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 # ==========================
