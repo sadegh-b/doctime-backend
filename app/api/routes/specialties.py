@@ -1,75 +1,147 @@
-# Path: app/api/routes/specialties.py
+# Path: backend/app/api/routes/specialties.py
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.doctor import Specialty
 
-# تنظیم لاگر برای دیدن خطاها در کنسول سرور
 logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/specialties", tags=["Specialties"])
 
-# طرح خروجی Pydantic متناسب با مدل
+
 class SpecialtyOut(BaseModel):
     id: int
     name: str
     slug: str
     description: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
-router = APIRouter(prefix="/specialties", tags=["Specialties"])
+DEFAULT_SPECIALTIES = [
+    {
+        "name": "قلب و عروق",
+        "slug": "cardiology",
+        "description": "متخصص بیماری‌های قلب و عروق",
+    },
+    {
+        "name": "پوست و مو",
+        "slug": "dermatology",
+        "description": "متخصص بیماری‌های پوست، مو و زیبایی",
+    },
+    {
+        "name": "مغز و اعصاب",
+        "slug": "neurology",
+        "description": "متخصص مغز، اعصاب و ستون فقرات",
+    },
+    {
+        "name": "داخلی",
+        "slug": "internal-medicine",
+        "description": "متخصص بیماری‌های داخلی",
+    },
+    {
+        "name": "کودکان",
+        "slug": "pediatrics",
+        "description": "متخصص بیماری‌های کودکان و نوزادان",
+    },
+    {
+        "name": "چشم‌پزشکی",
+        "slug": "ophthalmology",
+        "description": "متخصص چشم‌پزشکی و جراحی چشم",
+    },
+]
+
+
+def seed_default_specialties(db: Session) -> None:
+    """
+    Creates default specialties only when the specialties table is empty.
+
+    This helper is intentionally isolated so database transaction handling
+    remains explicit and testable.
+    """
+    has_any_specialty = db.query(Specialty.id).first()
+
+    if has_any_specialty is not None:
+        return
+
+    logger.info("Specialties table is empty. Seeding default specialties.")
+
+    entries = [
+        Specialty(
+            name=item["name"],
+            slug=item["slug"],
+            description=item["description"],
+        )
+        for item in DEFAULT_SPECIALTIES
+    ]
+
+    db.add_all(entries)
+    db.commit()
+
+    logger.info("Default specialties seeded successfully.")
 
 
 @router.get("/", response_model=List[SpecialtyOut])
-def get_specialties(db: Session = Depends(get_db)):
+def get_specialties(db: Session = Depends(get_db)) -> List[Specialty]:
     """
-    برگشت لیست تمام تخصص‌های ثبت شده.
-    در صورتی که جدول تخصص‌ها خالی باشد، مقادیر پیش‌فرض استاندارد را در دیتابیس درج می‌کند.
+    Returns all specialties.
+
+    If no specialty exists yet, the default specialty list is seeded once.
     """
     try:
-        specialties = db.query(Specialty).all()
+        seed_default_specialties(db)
 
-        if not specialties:
-            logger.info("Specialties table is empty. Seeding default data...")
+        return (
+            db.query(Specialty)
+            .order_by(Specialty.name.asc())
+            .all()
+        )
 
-            # نگاشت نام فارسی به slug انگلیسی و توضیحات اولیه
-            default_specialties = [
-                {"name": "قلب و عروق", "slug": "cardiology", "description": "متخصص بیماری‌های قلب و عروق"},
-                {"name": "پوست و مو", "slug": "dermatology", "description": "متخصص بیماری‌های پوست، مو و زیبایی"},
-                {"name": "مغز و اعصاب", "slug": "neurology", "description": "متخصص مغز، اعصاب و ستون فقرات"},
-                {"name": "داخلی", "slug": "internal-medicine", "description": "متخصص بیماری‌های داخلی"},
-                {"name": "کودکان", "slug": "pediatrics", "description": "متخصص بیماری‌های کودکان و نوزادان"},
-                {"name": "چشم‌پزشکی", "slug": "ophthalmology", "description": "متخصص چشم‌پزشکی و جراحی چشم"}
-            ]
+    except IntegrityError:
+        db.rollback()
 
-            # ساخت اشیاء مدل
-            new_entries = []
-            for spec_data in default_specialties:
-                new_entries.append(
-                    Specialty(
-                        name=spec_data["name"],
-                        slug=spec_data["slug"],
-                        description=spec_data["description"]
-                    )
-                )
+        # احتمال درخواست هم‌زمان هنگام seed شدن داده‌ها:
+        # بعد از rollback دوباره داده‌های موجود را می‌خوانیم.
+        logger.warning(
+            "IntegrityError while seeding specialties. "
+            "Reading existing specialties again."
+        )
 
-            db.add_all(new_entries)
-            db.commit()
-            logger.info("Default specialties successfully seeded.")
+        specialties = (
+            db.query(Specialty)
+            .order_by(Specialty.name.asc())
+            .all()
+        )
 
-            # مجددا داده‌ها را واکشی می‌کنیم تا با شناسه‌های اختصاص یافته برگردند
-            specialties = db.query(Specialty).all()
+        if specialties:
+            return specialties
 
-        return specialties
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="خطا در آماده‌سازی لیست تخصص‌ها رخ داد.",
+        )
 
-    except Exception as e:
-        db.rollback()  # لغو تراکنش در صورت بروز خطا برای جلوگیری از خرابی داده‌ها
-        logger.error(f"Error in get_specialties: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Database error while retrieving specialties.")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="خطای دیتابیس هنگام دریافت تخصص‌ها رخ داد.",
+        )
+
+    except Exception:
+        db.rollback()
+        logger.exception("Unexpected error while retrieving specialties.")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="خطای غیرمنتظره‌ای رخ داد.",
+        )

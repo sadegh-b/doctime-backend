@@ -1,21 +1,21 @@
-# Path: app/main.py
-
 import logging
 from os import getenv
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Database base for creating tables
 from app.database import Base, engine
 
-# Import models that definitely exist
+# -----------------------------------------------------------------------------
+# Import database models before Base.metadata.create_all().
+# noqa: F401 means these imports are intentional, even if not used directly.
+# -----------------------------------------------------------------------------
+
 from app.models.user import User  # noqa: F401
-from app.models.doctor import Doctor  # noqa: F401
+from app.models.doctor import Doctor, Specialty  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
 from app.models.consultation import ConsultationRequest  # noqa: F401
 
-# Load optional models safely
 try:
     from app.models.appointment import Appointment  # noqa: F401
 except ImportError:
@@ -26,13 +26,16 @@ try:
 except ImportError:
     pass
 
+# -----------------------------------------------------------------------------
 # Routers
+# -----------------------------------------------------------------------------
+
 from app.api.routes.appointments import router as appointments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
+from app.api.routes.consultations import router as consultations_router
 from app.api.routes.doctors import router as doctors_router
 from app.api.routes.reviews import router as reviews_router
-from app.api.routes.consultations import router as consultations_router
 from app.api.routes.specialties import router as specialties_router
 
 # -----------------------------------------------------------------------------
@@ -46,27 +49,19 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------------------------------
-# Constants
-# -----------------------------------------------------------------------------
-
 API_PREFIX = "/api/v1"
-
-# -----------------------------------------------------------------------------
-# App (Swagger endpoints moved under API_PREFIX)
-# -----------------------------------------------------------------------------
 
 app = FastAPI(
     title="DocTime API",
     description="Doctor Appointment Management System",
     version="1.0.0",
-    docs_url=f"{API_PREFIX}/docs",          # اصلاح شد: انتقال مستندات به پیشوند ورژن ۱
-    redoc_url=f"{API_PREFIX}/redoc",        # اصلاح شد
-    openapi_url=f"{API_PREFIX}/openapi.json",  # اصلاح شد
+    docs_url=f"{API_PREFIX}/docs",
+    redoc_url=f"{API_PREFIX}/redoc",
+    openapi_url=f"{API_PREFIX}/openapi.json",
 )
 
 # -----------------------------------------------------------------------------
-# CORS Configuration
+# CORS
 # -----------------------------------------------------------------------------
 
 allowed_origins = [
@@ -76,6 +71,7 @@ allowed_origins = [
 ]
 
 frontend_url = getenv("FRONTEND_URL", "").strip().rstrip("/")
+
 if frontend_url and frontend_url not in allowed_origins:
     allowed_origins.append(frontend_url)
 
@@ -88,7 +84,7 @@ app.add_middleware(
 )
 
 # -----------------------------------------------------------------------------
-# Root / Health
+# Health endpoints
 # -----------------------------------------------------------------------------
 
 @app.get("/", tags=["Health"], summary="API root endpoint")
@@ -97,7 +93,7 @@ def root() -> dict[str, str]:
         "status": "online",
         "message": "DocTime API is running successfully",
         "version": "1.0.0",
-        "docs": f"{API_PREFIX}/docs",  # اصلاح شد
+        "docs": f"{API_PREFIX}/docs",
     }
 
 
@@ -127,8 +123,10 @@ def api_v1_root() -> dict[str, str]:
         "api_version": "v1",
     }
 
+
 # -----------------------------------------------------------------------------
-# Routers
+# API routers
+# Every route file already has its own prefix, for example /auth or /doctors.
 # -----------------------------------------------------------------------------
 
 app.include_router(auth_router, prefix=API_PREFIX)
@@ -139,13 +137,14 @@ app.include_router(availability_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
 app.include_router(consultations_router, prefix=API_PREFIX)
 
+
 # -----------------------------------------------------------------------------
 # Lifecycle
 # -----------------------------------------------------------------------------
 
 @app.on_event("startup")
 def on_startup() -> None:
-    logger.info("Creating database tables if not exist...")
+    logger.info("Creating database tables if they do not exist...")
     Base.metadata.create_all(bind=engine)
 
     logger.info("DocTime API started successfully.")

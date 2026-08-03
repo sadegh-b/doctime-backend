@@ -1,76 +1,96 @@
 # app/api/routes/auth.py
 
 import logging
-import random
+import secrets
+import os
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_db
-from app.core.security import create_access_token, hash_password, verify_password
-from app.models.doctor import Doctor
-from app.models.user import User
-from app.models.otp import OTPVerification
-from app.schemas.auth import TokenResponse, UserLogin, UserResponse, OTPRequest
-from app.schemas.user import DoctorOut, UserOut, UserRegister
 from app.api.routes.availability import create_slots_for_range
+from app.core.security import create_access_token, hash_password, verify_password
+from app.models.doctor import Doctor, Specialty
+from app.models.otp import OTPVerification
+from app.models.user import User
+from app.schemas.auth import OTPRequest, TokenResponse, UserLogin, UserResponse
+from app.schemas.user import DoctorOut, UserOut, UserRegister
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
 
+# گرفتن وضعیت محیط برای مخفی‌سازی کدهای دیباگ در پروداکشن
+IS_DEBUG = os.getenv("ENV", "development").lower() in ("development", "dev", "true", "1")
+
 PERSIAN_DAY_TO_WEEKDAY = {
-    "دوشنبه": 0, "سه شنبه": 1, "سه‌شنبه": 1, "چهارشنبه": 2,
-    "پنج شنبه": 3, "پنج‌شنبه": 3, "جمعه": 4, "شنبه": 5,
-    "یکشنبه": 6, "یک‌شنبه": 6,
+    "دوشنبه": 0,
+    "سه شنبه": 1,
+    "سه‌شنبه": 1,
+    "چهارشنبه": 2,
+    "پنج شنبه": 3,
+    "پنج‌شنبه": 3,
+    "جمعه": 4,
+    "شنبه": 5,
+    "یکشنبه": 6,
+    "یک‌شنبه": 6,
 }
+
 
 def split_full_name(full_name: str) -> tuple[str, str]:
     cleaned = (full_name or "").strip()
     if not cleaned:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="نام و نام خانوادگی الزامی است."
+            detail="نام و نام خانوادگی الزامی است.",
         )
+
     parts = cleaned.split(maxsplit=1)
     first_name = parts[0]
     last_name = parts[1] if len(parts) > 1 else "نامشخص"
     return first_name, last_name
 
+
 def parse_time_str(value: Optional[str], field_name: str = "زمان") -> time:
     if value is None or str(value).strip() == "":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"{field_name} الزامی است."
+            detail=f"{field_name} الزامی است.",
         )
-    value = str(value).strip()
+
+    normalized_value = str(value).strip()
+
     try:
-        return datetime.strptime(value, "%H:%M").time()
-    except ValueError:
+        return datetime.strptime(normalized_value, "%H:%M").time()
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"فرمت ساعت نامعتبر است: {value}. فرمت درست مثل 09:30 است."
-        )
+            detail=f"فرمت ساعت نامعتبر است: {normalized_value}. فرمت درست مثل 09:30 است.",
+        ) from exc
+
 
 def parse_date_str(value: Optional[str]) -> date:
     if not value:
         return date.today()
+
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"فرمت تاریخ نامعتبر است: {value}. فرمت درست مثل 2026-07-25 است."
-        )
+            detail=f"فرمت تاریخ نامعتبر است: {value}. فرمت درست مثل 2026-07-25 است.",
+        ) from exc
+
 
 def validate_time_range(start: time, end: time, title: str) -> None:
     if start >= end:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"ساعت شروع {title} باید قبل از ساعت پایان باشد."
+            detail=f"ساعت شروع {title} باید قبل از ساعت پایان باشد.",
         )
+
 
 def validate_doctor_registration_data(user_data: UserRegister) -> None:
     if user_data.role != "doctor":
@@ -79,40 +99,60 @@ def validate_doctor_registration_data(user_data: UserRegister) -> None:
     if not user_data.work_days:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="حداقل یک روز کاری برای پزشک الزامی است."
+            detail="حداقل یک روز کاری برای پزشک الزامی است.",
         )
 
-    invalid_days = [day for day in user_data.work_days if day not in PERSIAN_DAY_TO_WEEKDAY]
+    invalid_days = [
+        day for day in user_data.work_days if day not in PERSIAN_DAY_TO_WEEKDAY
+    ]
     if invalid_days:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"روز(های) کاری نامعتبر هستند: {', '.join(invalid_days)}"
+            detail=f"روز(های) کاری نامعتبر هستند: {', '.join(invalid_days)}",
         )
 
     if user_data.work_shift not in ("morning", "afternoon", "both"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="نوع شیفت پزشک نامعتبر است."
+            detail="نوع شیفت پزشک نامعتبر است.",
         )
 
     if user_data.work_shift in ("morning", "both"):
-        m_start = parse_time_str(user_data.morning_start, "ساعت شروع شیفت صبح")
-        m_end = parse_time_str(user_data.morning_end, "ساعت پایان شیفت صبح")
-        validate_time_range(m_start, m_end, "شیفت صبح")
+        morning_start = parse_time_str(
+            user_data.morning_start,
+            "ساعت شروع شیفت صبح",
+        )
+        morning_end = parse_time_str(
+            user_data.morning_end,
+            "ساعت پایان شیفت صبح",
+        )
+        validate_time_range(morning_start, morning_end, "شیفت صبح")
 
     if user_data.work_shift in ("afternoon", "both"):
-        a_start = parse_time_str(user_data.afternoon_start, "ساعت شروع شیفت عصر")
-        a_end = parse_time_str(user_data.afternoon_end, "ساعت پایان شیفت عصر")
-        validate_time_range(a_start, a_end, "شیفت عصر")
+        afternoon_start = parse_time_str(
+            user_data.afternoon_start,
+            "ساعت شروع شیفت عصر",
+        )
+        afternoon_end = parse_time_str(
+            user_data.afternoon_end,
+            "ساعت پایان شیفت عصر",
+        )
+        validate_time_range(afternoon_start, afternoon_end, "شیفت عصر")
+
 
 def build_user_response(
     user: User,
     doctor: Optional[Doctor] = None,
     message: str = "OK",
-    token: Optional[TokenResponse] = None
+    token: Optional[TokenResponse] = None,
 ) -> UserResponse:
     if doctor:
-        specialty_name = doctor.specialty_relation.name if doctor.specialty_relation else "نامشخص"
+        specialty_name = (
+            doctor.specialty_relation.name
+            if doctor.specialty_relation
+            else "نامشخص"
+        )
+
         user_out = DoctorOut(
             id=user.id,
             name=user.name,
@@ -124,16 +164,16 @@ def build_user_response(
             medical_council_number=doctor.medical_council_number,
             specialty_id=doctor.specialty_id,
             specialty=specialty_name,
-            sub_specialty=getattr(doctor, "sub_specialty", None),
-            province=getattr(doctor, "province", None),
+            sub_specialty=doctor.sub_specialty,
+            province=doctor.province,
             city=doctor.city,
-            address=getattr(doctor, "address", None),
-            latitude=getattr(doctor, "latitude", None),
-            longitude=getattr(doctor, "longitude", None),
-            bio=getattr(doctor, "bio", None),
-            experience_years=getattr(doctor, "experience_years", 0) or 0,
-            consultation_fee=getattr(doctor, "consultation_fee", 0) or 0,
-            work_shift=getattr(doctor, "work_shift", None),
+            address=doctor.address,
+            latitude=doctor.latitude,
+            longitude=doctor.longitude,
+            bio=doctor.bio,
+            experience_years=doctor.experience_years or 0,
+            consultation_fee=doctor.consultation_fee or 0,
+            work_shift=doctor.work_shift,
         )
     else:
         user_out = UserOut(
@@ -147,17 +187,29 @@ def build_user_response(
 
     return UserResponse(message=message, user=user_out, token=token)
 
-def create_doctor_profile(db: Session, user: User, user_data: UserRegister) -> Doctor:
-    if not user_data.specialty_id:
+
+def create_doctor_profile(
+    db: Session,
+    user: User,
+    user_data: UserRegister,
+) -> Doctor:
+    if user_data.specialty_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="شناسه تخصص برای ثبت‌نام پزشک الزامی است."
+            detail="شناسه تخصص برای ثبت‌نام پزشک الزامی است.",
+        )
+
+    specialty = db.get(Specialty, user_data.specialty_id)
+    if specialty is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="تخصص انتخاب‌شده معتبر نیست.",
         )
 
     doctor = Doctor(
         user_id=user.id,
         medical_council_number=user_data.medical_council_number,
-        specialty_id=user_data.specialty_id,
+        specialty_id=specialty.id,
         sub_specialty=user_data.sub_specialty,
         province=user_data.province,
         city=user_data.city,
@@ -173,12 +225,13 @@ def create_doctor_profile(db: Session, user: User, user_data: UserRegister) -> D
     db.flush()
     return doctor
 
+
 def create_doctor_availabilities(
     db: Session,
     doctor_id: int,
     user_data: UserRegister,
     days_count: int = 30,
-    slot_minutes: int = 30
+    slot_minutes: int = 30,
 ) -> None:
     if user_data.role != "doctor":
         return
@@ -190,84 +243,99 @@ def create_doctor_availabilities(
         if day in PERSIAN_DAY_TO_WEEKDAY
     }
 
-    m_start = m_end = a_start = a_end = None
+    morning_start = None
+    morning_end = None
+    afternoon_start = None
+    afternoon_end = None
 
     if user_data.work_shift in ("morning", "both"):
-        m_start = parse_time_str(user_data.morning_start, "ساعت شروع شیفت صبح")
-        m_end = parse_time_str(user_data.morning_end, "ساعت پایان شیفت صبح")
+        morning_start = parse_time_str(
+            user_data.morning_start,
+            "ساعت شروع شیفت صبح",
+        )
+        morning_end = parse_time_str(
+            user_data.morning_end,
+            "ساعت پایان شیفت صبح",
+        )
 
     if user_data.work_shift in ("afternoon", "both"):
-        a_start = parse_time_str(user_data.afternoon_start, "ساعت شروع شیفت عصر")
-        a_end = parse_time_str(user_data.afternoon_end, "ساعت پایان شیفت عصر")
+        afternoon_start = parse_time_str(
+            user_data.afternoon_start,
+            "ساعت شروع شیفت عصر",
+        )
+        afternoon_end = parse_time_str(
+            user_data.afternoon_end,
+            "ساعت پایان شیفت عصر",
+        )
 
     for day_offset in range(days_count):
         current_date = start_date + timedelta(days=day_offset)
         if current_date.weekday() not in selected_weekdays:
             continue
 
-        if m_start and m_end:
+        if morning_start and morning_end:
             create_slots_for_range(
                 db=db,
                 doctor_id=doctor_id,
                 slot_date=current_date,
-                start_time=m_start,
-                end_time=m_end,
+                start_time=morning_start,
+                end_time=morning_end,
                 slot_minutes=slot_minutes,
             )
 
-        if a_start and a_end:
+        if afternoon_start and afternoon_end:
             create_slots_for_range(
                 db=db,
                 doctor_id=doctor_id,
                 slot_date=current_date,
-                start_time=a_start,
-                end_time=a_end,
+                start_time=afternoon_start,
+                end_time=afternoon_end,
                 slot_minutes=slot_minutes,
             )
 
-# ==========================================
-# OTP Endpoints
-# ==========================================
 
 @router.post("/otp/send", status_code=status.HTTP_200_OK)
 def send_otp(payload: OTPRequest, db: Session = Depends(get_db)):
-    code = f"{random.randint(100000, 999999)}"
+    # استفاده از secrets جهت امنیت بیشتر به جای random
+    code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
 
     db.query(OTPVerification).filter(
         OTPVerification.phone == payload.phone,
-        OTPVerification.is_verified == False
-    ).delete()
+        OTPVerification.is_verified.is_(False),
+    ).delete(synchronize_session=False)
 
     otp_entry = OTPVerification(
         phone=payload.phone,
         code=code,
         expires_at=expires_at,
-        is_verified=False
+        is_verified=False,
     )
     db.add(otp_entry)
     db.commit()
 
-    logger.info("=========== SIMULATED SMS SMS ==============")
-    logger.info(f"SMS SENT TO: {payload.phone} | CODE: {code}")
-    logger.info("============================================")
+    logger.info("=========== SIMULATED SMS =============")
+    logger.info("SMS SENT TO: %s | CODE: [PROTECTED]", payload.phone)
+    logger.info("=======================================")
 
-    return {
+    response_data = {
         "success": True,
         "message": "کد تایید ۶ رقمی پیامک شد.",
         "expires_in_seconds": 120,
-        "code_debug_only": code
     }
 
-# ==========================================
-# Core Authentication Endpoints
-# ==========================================
+    # فیلد کد تایید را فقط در حالت توسعه و لوکال به خروجی کلاینت اضافه می‌کنیم
+    if IS_DEBUG:
+        response_data["code_debug_only"] = code
+
+    return response_data
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_user(
     user_data: UserRegister,
     otp_code: str = Query(..., description="کد اعتبارسنجی پیامکی"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     validate_doctor_registration_data(user_data)
     now = datetime.now(timezone.utc)
@@ -275,13 +343,13 @@ def register_user(
     otp_record = db.query(OTPVerification).filter(
         OTPVerification.phone == user_data.phone,
         OTPVerification.code == otp_code,
-        OTPVerification.is_verified == False
+        OTPVerification.is_verified.is_(False),
     ).first()
 
     if not otp_record:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="کد تایید نامعتبر است."
+            detail="کد تایید نامعتبر است.",
         )
 
     expires_at = otp_record.expires_at
@@ -291,38 +359,45 @@ def register_user(
     if expires_at < now:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="کد تایید منقضی شده است."
+            detail="کد تایید منقضی شده است.",
         )
 
-    # اصلاح منطق شرط‌ها برای جلوگیری از بروز خطا در صورت وجود None
-    filters = (User.phone == user_data.phone)
-    if user_data.national_id and user_data.national_id.strip() != "":
+    filters = User.phone == user_data.phone
+    if user_data.national_id and user_data.national_id.strip():
         filters = filters | (User.national_id == user_data.national_id)
-    if user_data.email and user_data.email.strip() != "":
+    if user_data.email and user_data.email.strip():
         filters = filters | (User.email == user_data.email)
 
     existing_user = db.query(User).filter(filters).first()
     if existing_user:
         if existing_user.phone == user_data.phone:
             detail = "این شماره موبایل قبلاً ثبت شده است."
-        elif user_data.national_id and existing_user.national_id == user_data.national_id:
+        elif (
+            user_data.national_id
+            and existing_user.national_id == user_data.national_id
+        ):
             detail = "این کد ملی قبلاً ثبت شده است."
         else:
             detail = "این ایمیل قبلاً ثبت شده است."
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail,
+        )
 
     if user_data.role == "doctor":
         if not user_data.national_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="کد ملی برای پزشکان الزامی است."
+                detail="کد ملی برای پزشکان الزامی است.",
             )
+
         if db.query(Doctor).filter(
             Doctor.medical_council_number == user_data.medical_council_number
         ).first():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="این کد نظام پزشکی قبلاً ثبت شده است."
+                detail="این کد نظام پزشکی قبلاً ثبت شده است.",
             )
 
     try:
@@ -332,9 +407,17 @@ def register_user(
             name=user_data.name,
             first_name=first_name,
             last_name=last_name,
-            national_id=user_data.national_id if user_data.national_id and user_data.national_id.strip() != "" else None,
+            national_id=(
+                user_data.national_id
+                if user_data.national_id and user_data.national_id.strip()
+                else None
+            ),
             phone=user_data.phone,
-            email=user_data.email if user_data.email and user_data.email.strip() != "" else None,
+            email=(
+                user_data.email
+                if user_data.email and user_data.email.strip()
+                else None
+            ),
             hashed_password=hash_password(user_data.password),
             role=user_data.role,
             is_active=True,
@@ -344,8 +427,16 @@ def register_user(
 
         doctor = None
         if user_data.role == "doctor":
-            doctor = create_doctor_profile(db=db, user=user, user_data=user_data)
-            create_doctor_availabilities(db=db, doctor_id=doctor.id, user_data=user_data)
+            doctor = create_doctor_profile(
+                db=db,
+                user=user,
+                user_data=user_data,
+            )
+            create_doctor_availabilities(
+                db=db,
+                doctor_id=doctor.id,
+                user_data=user_data,
+            )
 
         otp_record.is_verified = True
         db.commit()
@@ -359,22 +450,32 @@ def register_user(
             user=user,
             doctor=doctor,
             message="ثبت‌نام با موفقیت انجام شد.",
-            token=TokenResponse(access_token=access_token, token_type="bearer")
+            token=TokenResponse(
+                access_token=access_token,
+                token_type="bearer",
+            ),
         )
 
-    except IntegrityError:
+    except HTTPException:
         db.rollback()
+        raise
+
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Integrity violation during registration: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="اطلاعات وارد شده تکراری یا نامعتبر است."
+            detail="اطلاعات وارد شده تکراری یا ناقض محدودیت‌های دیتابیس است.",
         )
+
     except Exception as exc:
         db.rollback()
         logger.exception("Registration error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="خطای داخلی سرور."
+            detail="خطای داخلی سرور رخ داد.",
         )
+
 
 @router.post("/login", response_model=UserResponse)
 def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
@@ -382,27 +483,46 @@ def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="شماره موبایل یا رمز عبور اشتباه است."
+            detail="شماره موبایل یا رمز عبور اشتباه است.",
         )
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="حساب کاربری شما غیرفعال است."
+            detail="حساب کاربری شما غیرفعال است.",
         )
 
-    doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first() if user.role == "doctor" else None
+    doctor = None
+    if user.role == "doctor":
+        doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
+
     access_token = create_access_token(subject=str(user.id))
     return build_user_response(
         user=user,
         doctor=doctor,
         message="ورود موفقیت‌آمیز بود.",
-        token=TokenResponse(access_token=access_token, token_type="bearer")
+        token=TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+        ),
     )
 
+
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first() if current_user.role == "doctor" else None
-    return build_user_response(user=current_user, doctor=doctor, message="اطلاعات کاربر دریافت شد.")
+def get_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    doctor = None
+    if current_user.role == "doctor":
+        doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+
+    return build_user_response(
+        user=current_user,
+        doctor=doctor,
+        message="اطلاعات کاربر دریافت شد.",
+    )
+
 
 @router.post("/logout")
 def logout_user():
