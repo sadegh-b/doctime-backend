@@ -421,6 +421,9 @@ def get_my_appointments(
                     if doctor and doctor.user
                     else "نامشخص"
                 ),
+                "doctor_specialty": (
+                    doctor.specialty if doctor else None
+                ),
                 "date": (
                     availability.date.isoformat()
                     if availability else None
@@ -592,7 +595,6 @@ def get_all_appointments_filtered(
         .options(
             joinedload(Appointment.availability),
             joinedload(Appointment.doctor).joinedload(Doctor.user),
-            joinedload(Appointment.doctor).joinedload(Doctor.specialty_relation),
             joinedload(Appointment.patient),
         )
     )
@@ -612,18 +614,6 @@ def get_all_appointments_filtered(
     items = []
 
     for item in appointments:
-        if item.doctor and not item.doctor.specialty_relation:
-            raise HTTPException(
-                status_code=500,
-                detail="Doctor specialty relation is missing."
-            )
-
-        doctor_specialty_name = (
-            item.doctor.specialty_relation.name
-            if item.doctor and item.doctor.specialty_relation
-            else None
-        )
-
         items.append(
             {
                 "id": item.id,
@@ -638,7 +628,9 @@ def get_all_appointments_filtered(
                     if item.doctor and item.doctor.user and item.doctor.user.name
                     else "Unknown"
                 ),
-                "doctor_specialty": doctor_specialty_name,
+                "doctor_specialty": (
+                    item.doctor.specialty if item.doctor else None
+                ),
                 "date": item.availability.date.isoformat() if item.availability else None,
                 "start_time": item.availability.start_time.strftime("%H:%M") if item.availability else None,
                 "end_time": item.availability.end_time.strftime("%H:%M") if item.availability else None,

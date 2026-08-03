@@ -82,7 +82,7 @@ class UserRegister(BaseModel):
     role: UserRole = "patient"
 
     medical_council_number: Optional[str] = None
-    specialty_id: Optional[int] = None  
+    specialty_id: Optional[int] = None
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -292,8 +292,8 @@ class DoctorOut(BaseModel):
 
     doctor_id: Optional[int] = None
     medical_council_number: Optional[str] = None
-    specialty_id: Optional[int] = None  
-    specialty: Optional[str] = None  
+    specialty_id: Optional[int] = None
+    specialty: Optional[str] = None
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
@@ -348,7 +348,7 @@ class UserUpdate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
-    specialty_id: Optional[int] = None  
+    specialty_id: Optional[int] = None
     sub_specialty: Optional[str] = None
     province: Optional[str] = None
     city: Optional[str] = None
