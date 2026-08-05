@@ -1,8 +1,9 @@
 # app/api/routes/auth.py
 
 import logging
-import secrets
 import os
+import re
+import secrets
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
@@ -22,8 +23,14 @@ from app.schemas.user import DoctorOut, UserOut, UserRegister
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
 
-# گرفتن وضعیت محیط برای مخفی‌سازی کدهای دیباگ در پروداکشن
-IS_DEBUG = os.getenv("ENV", "development").lower() in ("development", "dev", "true", "1")
+# فقط در development کد OTP را به کلاینت برگردان.
+IS_DEBUG = os.getenv("ENV", "development").lower() in (
+    "development",
+    "dev",
+    "local",
+    "true",
+    "1",
+)
 
 PERSIAN_DAY_TO_WEEKDAY = {
     "دوشنبه": 0,
@@ -39,8 +46,155 @@ PERSIAN_DAY_TO_WEEKDAY = {
 }
 
 
+# =========================
+# Normalization Helpers
+# =========================
+
+def to_english_digits(value: Optional[str]) -> Optional[str]:
+    """
+    تبدیل ارقام فارسی/عربی به انگلیسی.
+    Example:
+        ۰۹۱۲۳۴۵۶۷۸۹ -> 09123456789
+    """
+    if value is None:
+        return None
+
+    text = str(value)
+
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+
+    for index, digit in enumerate(persian_digits):
+        text = text.replace(digit, str(index))
+
+    for index, digit in enumerate(arabic_digits):
+        text = text.replace(digit, str(index))
+
+    return text
+
+
+def empty_to_none(value: Optional[str]) -> Optional[str]:
+    """
+    رشته خالی، فاصله، None را به None تبدیل می‌کند.
+    """
+    if value is None:
+        return None
+
+    cleaned = str(value).strip()
+    return cleaned if cleaned else None
+
+
+def normalize_phone(value: Optional[str]) -> str:
+    """
+    شماره موبایل را نرمال می‌کند.
+    """
+    normalized = to_english_digits(value)
+    normalized = empty_to_none(normalized)
+
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="شماره موبایل الزامی است.",
+        )
+
+    normalized = re.sub(r"\s+", "", normalized)
+
+    return normalized
+
+
+def normalize_optional_digits(value: Optional[str]) -> Optional[str]:
+    """
+    برای national_id و کدهای عددی اختیاری.
+    """
+    normalized = to_english_digits(value)
+    normalized = empty_to_none(normalized)
+
+    if not normalized:
+        return None
+
+    normalized = re.sub(r"\s+", "", normalized)
+    return normalized
+
+
+def normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    return empty_to_none(value)
+
+
+def normalize_optional_email(value: Optional[str]) -> Optional[str]:
+    cleaned = empty_to_none(value)
+    if not cleaned:
+        return None
+
+    return cleaned.lower()
+
+
+def normalize_user_register_data(user_data: UserRegister) -> UserRegister:
+    """
+    داده ثبت‌نام را سمت بک‌اند هم تمیز می‌کنیم.
+    نکته مهم:
+    حتی اگر فرانت درست بفرستد، بک‌اند نباید به فرانت اعتماد کند.
+    """
+    user_data.name = empty_to_none(user_data.name) or ""
+    user_data.phone = normalize_phone(user_data.phone)
+
+    user_data.national_id = normalize_optional_digits(user_data.national_id)
+    user_data.email = normalize_optional_email(user_data.email)
+
+    user_data.medical_council_number = normalize_optional_digits(
+        user_data.medical_council_number
+    )
+
+    user_data.province = normalize_optional_text(user_data.province)
+    user_data.city = normalize_optional_text(user_data.city)
+    user_data.address = normalize_optional_text(user_data.address)
+    user_data.sub_specialty = normalize_optional_text(user_data.sub_specialty)
+    user_data.bio = normalize_optional_text(user_data.bio)
+
+    user_data.work_shift = normalize_optional_text(user_data.work_shift)
+    user_data.morning_start = normalize_optional_text(user_data.morning_start)
+    user_data.morning_end = normalize_optional_text(user_data.morning_end)
+    user_data.afternoon_start = normalize_optional_text(user_data.afternoon_start)
+    user_data.afternoon_end = normalize_optional_text(user_data.afternoon_end)
+    user_data.schedule_start_date = normalize_optional_text(
+        user_data.schedule_start_date
+    )
+
+    return user_data
+
+
+def get_integrity_error_detail(exc: IntegrityError) -> str:
+    """
+    تلاش برای تشخیص دقیق‌تر خطای unique constraint دیتابیس.
+    """
+    raw_error = str(getattr(exc, "orig", exc)).lower()
+
+    logger.error("Raw IntegrityError: %s", raw_error)
+
+    if "phone" in raw_error:
+        return "این شماره موبایل قبلاً ثبت شده است."
+
+    if "national_id" in raw_error or "national id" in raw_error:
+        return "این کد ملی قبلاً ثبت شده است."
+
+    if "email" in raw_error:
+        return "این ایمیل قبلاً ثبت شده است."
+
+    if "medical_council_number" in raw_error or "council" in raw_error:
+        return "این کد نظام پزشکی قبلاً ثبت شده است."
+
+    if "user_id" in raw_error and "doctor" in raw_error:
+        return "برای این کاربر قبلاً پروفایل پزشک ساخته شده است."
+
+    return "اطلاعات وارد شده با داده‌های موجود در دیتابیس تداخل دارد."
+
+
+# =========================
+# Validation Helpers
+# =========================
+
 def split_full_name(full_name: str) -> tuple[str, str]:
     cleaned = (full_name or "").strip()
+
     if not cleaned:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -50,6 +204,7 @@ def split_full_name(full_name: str) -> tuple[str, str]:
     parts = cleaned.split(maxsplit=1)
     first_name = parts[0]
     last_name = parts[1] if len(parts) > 1 else "نامشخص"
+
     return first_name, last_name
 
 
@@ -67,7 +222,10 @@ def parse_time_str(value: Optional[str], field_name: str = "زمان") -> time:
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"فرمت ساعت نامعتبر است: {normalized_value}. فرمت درست مثل 09:30 است.",
+            detail=(
+                f"فرمت ساعت نامعتبر است: {normalized_value}. "
+                "فرمت درست مثل 09:30 است."
+            ),
         ) from exc
 
 
@@ -80,7 +238,10 @@ def parse_date_str(value: Optional[str]) -> date:
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"فرمت تاریخ نامعتبر است: {value}. فرمت درست مثل 2026-07-25 است.",
+            detail=(
+                f"فرمت تاریخ نامعتبر است: {value}. "
+                "فرمت درست مثل 2026-07-25 است."
+            ),
         ) from exc
 
 
@@ -93,8 +254,30 @@ def validate_time_range(start: time, end: time, title: str) -> None:
 
 
 def validate_doctor_registration_data(user_data: UserRegister) -> None:
+    """
+    فقط برای پزشک سخت‌گیری می‌کنیم.
+    برای بیمار، national_id اختیاری است.
+    """
     if user_data.role != "doctor":
         return
+
+    if not user_data.national_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="کد ملی برای پزشکان الزامی است.",
+        )
+
+    if not user_data.medical_council_number:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="کد نظام پزشکی برای ثبت‌نام پزشک الزامی است.",
+        )
+
+    if user_data.specialty_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="شناسه تخصص برای ثبت‌نام پزشک الزامی است.",
+        )
 
     if not user_data.work_days:
         raise HTTPException(
@@ -103,8 +286,10 @@ def validate_doctor_registration_data(user_data: UserRegister) -> None:
         )
 
     invalid_days = [
-        day for day in user_data.work_days if day not in PERSIAN_DAY_TO_WEEKDAY
+        day for day in user_data.work_days
+        if day not in PERSIAN_DAY_TO_WEEKDAY
     ]
+
     if invalid_days:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -139,6 +324,10 @@ def validate_doctor_registration_data(user_data: UserRegister) -> None:
         )
         validate_time_range(afternoon_start, afternoon_end, "شیفت عصر")
 
+
+# =========================
+# Response Builders
+# =========================
 
 def build_user_response(
     user: User,
@@ -185,8 +374,16 @@ def build_user_response(
             is_active=user.is_active,
         )
 
-    return UserResponse(message=message, user=user_out, token=token)
+    return UserResponse(
+        message=message,
+        user=user_out,
+        token=token,
+    )
 
+
+# =========================
+# Doctor Helpers
+# =========================
 
 def create_doctor_profile(
     db: Session,
@@ -200,6 +397,7 @@ def create_doctor_profile(
         )
 
     specialty = db.get(Specialty, user_data.specialty_id)
+
     if specialty is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -221,8 +419,10 @@ def create_doctor_profile(
         consultation_fee=user_data.consultation_fee,
         work_shift=user_data.work_shift,
     )
+
     db.add(doctor)
     db.flush()
+
     return doctor
 
 
@@ -237,6 +437,7 @@ def create_doctor_availabilities(
         return
 
     start_date = parse_date_str(user_data.schedule_start_date)
+
     selected_weekdays = {
         PERSIAN_DAY_TO_WEEKDAY[day]
         for day in user_data.work_days
@@ -270,6 +471,7 @@ def create_doctor_availabilities(
 
     for day_offset in range(days_count):
         current_date = start_date + timedelta(days=day_offset)
+
         if current_date.weekday() not in selected_weekdays:
             continue
 
@@ -294,28 +496,34 @@ def create_doctor_availabilities(
             )
 
 
+# =========================
+# Routes
+# =========================
+
 @router.post("/otp/send", status_code=status.HTTP_200_OK)
 def send_otp(payload: OTPRequest, db: Session = Depends(get_db)):
-    # استفاده از secrets جهت امنیت بیشتر به جای random
+    phone = normalize_phone(payload.phone)
+
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
 
     db.query(OTPVerification).filter(
-        OTPVerification.phone == payload.phone,
+        OTPVerification.phone == phone,
         OTPVerification.is_verified.is_(False),
     ).delete(synchronize_session=False)
 
     otp_entry = OTPVerification(
-        phone=payload.phone,
+        phone=phone,
         code=code,
         expires_at=expires_at,
         is_verified=False,
     )
+
     db.add(otp_entry)
     db.commit()
 
     logger.info("=========== SIMULATED SMS =============")
-    logger.info("SMS SENT TO: %s | CODE: [PROTECTED]", payload.phone)
+    logger.info("SMS SENT TO: %s | CODE: [PROTECTED]", phone)
     logger.info("=======================================")
 
     response_data = {
@@ -324,25 +532,30 @@ def send_otp(payload: OTPRequest, db: Session = Depends(get_db)):
         "expires_in_seconds": 120,
     }
 
-    # فیلد کد تایید را فقط در حالت توسعه و لوکال به خروجی کلاینت اضافه می‌کنیم
     if IS_DEBUG:
         response_data["code_debug_only"] = code
 
     return response_data
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def register_user(
     user_data: UserRegister,
     otp_code: str = Query(..., description="کد اعتبارسنجی پیامکی"),
     db: Session = Depends(get_db),
 ):
+    user_data = normalize_user_register_data(user_data)
     validate_doctor_registration_data(user_data)
+
     now = datetime.now(timezone.utc)
 
     otp_record = db.query(OTPVerification).filter(
         OTPVerification.phone == user_data.phone,
-        OTPVerification.code == otp_code,
+        OTPVerification.code == otp_code.strip(),
         OTPVerification.is_verified.is_(False),
     ).first()
 
@@ -353,6 +566,7 @@ def register_user(
         )
 
     expires_at = otp_record.expires_at
+
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
@@ -362,23 +576,30 @@ def register_user(
             detail="کد تایید منقضی شده است.",
         )
 
-    filters = User.phone == user_data.phone
-    if user_data.national_id and user_data.national_id.strip():
-        filters = filters | (User.national_id == user_data.national_id)
-    if user_data.email and user_data.email.strip():
-        filters = filters | (User.email == user_data.email)
+    # بررسی تکراری بودن کاربر با پیام دقیق
+    duplicate_filters = User.phone == user_data.phone
 
-    existing_user = db.query(User).filter(filters).first()
+    if user_data.national_id:
+        duplicate_filters = duplicate_filters | (
+            User.national_id == user_data.national_id
+        )
+
+    if user_data.email:
+        duplicate_filters = duplicate_filters | (
+            User.email == user_data.email
+        )
+
+    existing_user = db.query(User).filter(duplicate_filters).first()
+
     if existing_user:
         if existing_user.phone == user_data.phone:
             detail = "این شماره موبایل قبلاً ثبت شده است."
-        elif (
-            user_data.national_id
-            and existing_user.national_id == user_data.national_id
-        ):
+        elif user_data.national_id and existing_user.national_id == user_data.national_id:
             detail = "این کد ملی قبلاً ثبت شده است."
-        else:
+        elif user_data.email and existing_user.email == user_data.email:
             detail = "این ایمیل قبلاً ثبت شده است."
+        else:
+            detail = "اطلاعات وارد شده قبلاً ثبت شده است."
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -386,15 +607,11 @@ def register_user(
         )
 
     if user_data.role == "doctor":
-        if not user_data.national_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="کد ملی برای پزشکان الزامی است.",
-            )
-
-        if db.query(Doctor).filter(
+        existing_doctor = db.query(Doctor).filter(
             Doctor.medical_council_number == user_data.medical_council_number
-        ).first():
+        ).first()
+
+        if existing_doctor:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="این کد نظام پزشکی قبلاً ثبت شده است.",
@@ -407,31 +624,26 @@ def register_user(
             name=user_data.name,
             first_name=first_name,
             last_name=last_name,
-            national_id=(
-                user_data.national_id
-                if user_data.national_id and user_data.national_id.strip()
-                else None
-            ),
+            national_id=user_data.national_id,
             phone=user_data.phone,
-            email=(
-                user_data.email
-                if user_data.email and user_data.email.strip()
-                else None
-            ),
+            email=user_data.email,
             hashed_password=hash_password(user_data.password),
             role=user_data.role,
             is_active=True,
         )
+
         db.add(user)
         db.flush()
 
         doctor = None
+
         if user_data.role == "doctor":
             doctor = create_doctor_profile(
                 db=db,
                 user=user,
                 user_data=user_data,
             )
+
             create_doctor_availabilities(
                 db=db,
                 doctor_id=doctor.id,
@@ -439,13 +651,16 @@ def register_user(
             )
 
         otp_record.is_verified = True
+
         db.commit()
 
         db.refresh(user)
+
         if doctor:
             db.refresh(doctor)
 
         access_token = create_access_token(subject=str(user.id))
+
         return build_user_response(
             user=user,
             doctor=doctor,
@@ -462,24 +677,30 @@ def register_user(
 
     except IntegrityError as exc:
         db.rollback()
-        logger.exception("Integrity violation during registration: %s", exc)
+        logger.exception("Integrity violation during registration")
+        detail = get_integrity_error_detail(exc)
+
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="اطلاعات وارد شده تکراری یا ناقض محدودیت‌های دیتابیس است.",
-        )
+            detail=detail,
+        ) from exc
 
     except Exception as exc:
         db.rollback()
-        logger.exception("Registration error: %s", exc)
+        logger.exception("Registration error")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="خطای داخلی سرور رخ داد.",
-        )
+        ) from exc
 
 
 @router.post("/login", response_model=UserResponse)
 def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.phone == user_data.phone).first()
+    phone = normalize_phone(user_data.phone)
+
+    user = db.query(User).filter(User.phone == phone).first()
+
     if not user or not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -493,10 +714,12 @@ def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
         )
 
     doctor = None
+
     if user.role == "doctor":
         doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
 
     access_token = create_access_token(subject=str(user.id))
+
     return build_user_response(
         user=user,
         doctor=doctor,
@@ -514,6 +737,7 @@ def get_me(
     db: Session = Depends(get_db),
 ):
     doctor = None
+
     if current_user.role == "doctor":
         doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
 
