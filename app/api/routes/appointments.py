@@ -9,7 +9,7 @@ import jdatetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import and_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_db
 from app.models.appointment import Appointment
@@ -95,10 +95,176 @@ def convert_to_jalali_details(gregorian_date: date):
     return numeric, text
 
 
+def get_user_by_id(db: Session, user_id: int | None) -> User | None:
+    if not user_id:
+        return None
+
+    return (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+
+def get_doctor_by_id(db: Session, doctor_id: int | None) -> Doctor | None:
+    if not doctor_id:
+        return None
+
+    return (
+        db.query(Doctor)
+        .filter(Doctor.id == doctor_id)
+        .first()
+    )
+
+
+def get_availability_by_id(db: Session, availability_id: int | None) -> Availability | None:
+    if not availability_id:
+        return None
+
+    return (
+        db.query(Availability)
+        .filter(Availability.id == availability_id)
+        .first()
+    )
+
+
+def get_user_display_name(user: User | None) -> str:
+    """
+    گرفتن نام نمایشی کاربر به شکل امن.
+
+    بعضی پروژه‌ها name دارند، بعضی full_name، بعضی first_name/last_name.
+    این تابع باعث می‌شود اگر یک فیلد وجود نداشت endpoint با AttributeError خراب نشود.
+    """
+    if not user:
+        return "نامشخص"
+
+    name = getattr(user, "name", None)
+    if name:
+        return str(name)
+
+    full_name = getattr(user, "full_name", None)
+    if full_name:
+        return str(full_name)
+
+    first_name = getattr(user, "first_name", None)
+    last_name = getattr(user, "last_name", None)
+
+    combined_name = f"{first_name or ''} {last_name or ''}".strip()
+    if combined_name:
+        return combined_name
+
+    phone = getattr(user, "phone", None)
+    if phone:
+        return str(phone)
+
+    return "نامشخص"
+
+
+def get_doctor_specialty_name(doctor: Doctor | None) -> str | None:
+    """
+    گرفتن نام تخصص پزشک به شکل امن.
+
+    نکته مهم:
+    در مدل Doctor پروژه تو ظاهراً فیلد مستقیم doctor.specialty وجود ندارد.
+    پس نباید مستقیم doctor.specialty صدا زده شود.
+    """
+    if not doctor:
+        return None
+
+    try:
+        specialty_relation = getattr(doctor, "specialty_relation", None)
+        if specialty_relation:
+            specialty_name = getattr(specialty_relation, "name", None)
+            if specialty_name:
+                return str(specialty_name)
+    except Exception:
+        pass
+
+    try:
+        specialty_obj = getattr(doctor, "specialty_obj", None)
+        if specialty_obj:
+            specialty_name = getattr(specialty_obj, "name", None)
+            if specialty_name:
+                return str(specialty_name)
+    except Exception:
+        pass
+
+    try:
+        specialty_id = getattr(doctor, "specialty_id", None)
+        if specialty_id:
+            return f"تخصص کد {specialty_id}"
+    except Exception:
+        pass
+
+    return None
+
+
+def serialize_appointment(db: Session, appointment: Appointment) -> dict:
+    """
+    تبدیل یک نوبت به خروجی JSON-safe.
+
+    این تابع عمداً از relationship مستقیم مثل appointment.doctor.user استفاده نمی‌کند.
+    دلیل:
+    اگر relationshipهای SQLAlchemy ناقص، تغییرنام‌داده‌شده، یا lazy-loading مشکل‌دار باشند،
+    endpoint با 500 خراب می‌شود.
+    """
+
+    availability_id = getattr(appointment, "availability_id", None)
+    doctor_id = getattr(appointment, "doctor_id", None)
+    patient_id = getattr(appointment, "patient_id", None)
+
+    availability = get_availability_by_id(db, availability_id)
+    doctor = get_doctor_by_id(db, doctor_id)
+
+    doctor_user = None
+    if doctor:
+        doctor_user_id = getattr(doctor, "user_id", None)
+        doctor_user = get_user_by_id(db, doctor_user_id)
+
+    patient_user = get_user_by_id(db, patient_id)
+
+    date_value = None
+    start_time_value = None
+    end_time_value = None
+
+    if availability:
+        availability_date = getattr(availability, "date", None)
+        availability_start_time = getattr(availability, "start_time", None)
+        availability_end_time = getattr(availability, "end_time", None)
+
+        if availability_date:
+            date_value = availability_date.isoformat()
+
+        if availability_start_time:
+            start_time_value = availability_start_time.strftime("%H:%M")
+
+        if availability_end_time:
+            end_time_value = availability_end_time.strftime("%H:%M")
+
+    held_at = getattr(appointment, "held_at", None)
+
+    return {
+        "id": getattr(appointment, "id", None),
+        "status": getattr(appointment, "status", None),
+        "doctor_id": doctor_id,
+        "patient_id": patient_id,
+        "availability_id": availability_id,
+        "doctor_name": get_user_display_name(doctor_user),
+        "patient_name": get_user_display_name(patient_user),
+        "doctor_specialty": get_doctor_specialty_name(doctor),
+        "date": date_value,
+        "start_time": start_time_value,
+        "end_time": end_time_value,
+        "notes": getattr(appointment, "notes", None),
+        "tracking_code": getattr(appointment, "tracking_code", None),
+        "held_at": held_at.isoformat() if held_at else None,
+    }
+
+
 def get_current_doctor_profile(db: Session, current_user: User):
     if current_user.role != "doctor":
         raise HTTPException(
-            status_code=403,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="فقط پزشک دسترسی دارد."
         )
 
@@ -110,7 +276,7 @@ def get_current_doctor_profile(db: Session, current_user: User):
 
     if not doctor:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="پروفایل پزشک پیدا نشد."
         )
 
@@ -127,7 +293,7 @@ def get_locked_appointment(db: Session, appointment_id: int):
 
     if not appointment:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="نوبت پیدا نشد."
         )
 
@@ -139,14 +305,14 @@ def get_locked_appointment(db: Session, appointment_id: int):
 # ==========================
 
 def execute_booking(
-        db: Session,
-        slot_id: int,
-        current_user: User,
-        notes: str | None = None,
+    db: Session,
+    slot_id: int,
+    current_user: User,
+    notes: str | None = None,
 ):
     if current_user.role != "patient":
         raise HTTPException(
-            status_code=403,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="فقط بیمار می‌تواند رزرو کند.",
         )
 
@@ -160,13 +326,13 @@ def execute_booking(
 
         if not slot:
             raise HTTPException(
-                status_code=404,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail="زمان پیدا نشد.",
             )
 
         if slot.is_booked or not slot.is_available:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="این زمان قبلاً رزرو شده است یا در دسترس نیست.",
             )
 
@@ -178,7 +344,7 @@ def execute_booking(
 
         if not doctor:
             raise HTTPException(
-                status_code=404,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail="پزشک پیدا نشد.",
             )
 
@@ -199,7 +365,7 @@ def execute_booking(
 
         if duplicate:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="برای این پزشک در این روز نوبت فعال دارید.",
             )
 
@@ -234,24 +400,24 @@ def execute_booking(
         db.rollback()
         traceback.print_exc()
         raise HTTPException(
-            status_code=500,
-            detail="خطای داخلی هنگام رزرو نوبت در دیتابیس.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"خطای داخلی هنگام رزرو نوبت در دیتابیس: {str(exc)}",
         )
 
 
 # ==========================
-# Endpoints
+# Doctor Schedule
 # ==========================
 
 @router.get(
     "/doctors/{doctor_id}/schedule",
-    response_model=DoctorScheduleResponse
+    response_model=DoctorScheduleResponse,
 )
 def get_doctor_schedule_grid(
-        doctor_id: int,
-        start_date: Optional[date] = None,
-        days_limit: int = Query(default=14, ge=1, le=90),
-        db: Session = Depends(get_db),
+    doctor_id: int,
+    start_date: Optional[date] = None,
+    days_limit: int = Query(default=14, ge=1, le=90),
+    db: Session = Depends(get_db),
 ):
     if start_date is None:
         start_date = date.today()
@@ -287,6 +453,7 @@ def get_doctor_schedule_grid(
 
     for target_date in sorted(grouped.keys()):
         jalali_numeric, jalali_text = convert_to_jalali_details(target_date)
+
         schedule.append(
             DailyScheduleOut(
                 date=target_date.isoformat(),
@@ -304,127 +471,127 @@ def get_doctor_schedule_grid(
     }
 
 
+# ==========================
+# Create Appointment
+# ==========================
+
 @router.post(
     "",
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
 )
 def create_appointment(
-        body: AppointmentCreate,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_user),
+    body: AppointmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     appointment = execute_booking(
-        db,
-        body.availability_id,
-        current_user,
-        body.notes
+        db=db,
+        slot_id=body.availability_id,
+        current_user=current_user,
+        notes=body.notes,
     )
 
     return {
         "success": True,
-        "appointment_id": appointment.id
+        "appointment_id": appointment.id,
     }
 
 
 @router.post(
     "/book/{slot_id}",
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
 )
 def book_appointment_quick(
-        slot_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_user),
+    slot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     appointment = execute_booking(
-        db,
-        slot_id,
-        current_user
+        db=db,
+        slot_id=slot_id,
+        current_user=current_user,
     )
 
     return {
         "success": True,
-        "appointment_id": appointment.id
+        "appointment_id": appointment.id,
     }
 
 
 # ==========================
-# Patient Appointments
+# My Appointments
 # ==========================
 
 @router.get("/me")
 def get_my_appointments(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    """
+    دریافت نوبت‌های کاربر فعلی.
+
+    این endpoint برای بیمار و پزشک کار می‌کند.
+    نسخه ضدخطا:
+    - بدون joinedload
+    - بدون appointment.doctor.user
+    - بدون appointment.patient.name
+    - بدون doctor.specialty مستقیم
+    """
+
     try:
-        query = db.query(Appointment).options(
-            joinedload(Appointment.availability),
-            joinedload(Appointment.doctor).joinedload(Doctor.user),
-            joinedload(Appointment.patient)
-        )
-
         if current_user.role == "patient":
-            query = query.filter(Appointment.patient_id == current_user.id)
+            appointments = (
+                db.query(Appointment)
+                .filter(Appointment.patient_id == current_user.id)
+                .order_by(Appointment.id.desc())
+                .all()
+            )
+
         elif current_user.role == "doctor":
-            doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-            if not doctor:
-                raise HTTPException(status_code=404, detail="پروفایل پزشک پیدا نشد.")
-            query = query.filter(Appointment.doctor_id == doctor.id)
+            doctor_profile = (
+                db.query(Doctor)
+                .filter(Doctor.user_id == current_user.id)
+                .first()
+            )
+
+            if not doctor_profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="پروفایل پزشک پیدا نشد.",
+                )
+
+            appointments = (
+                db.query(Appointment)
+                .filter(Appointment.doctor_id == doctor_profile.id)
+                .order_by(Appointment.id.desc())
+                .all()
+            )
+
         else:
-            raise HTTPException(status_code=403, detail="دسترسی غیرمجاز.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="دسترسی غیرمجاز.",
+            )
 
-        appointments = query.order_by(Appointment.id.desc()).all()
-
-        items = []
-        for appointment in appointments:
-            availability = appointment.availability
-            doctor = appointment.doctor
-
-            # استخراج نام تخصص در صورت وجود رابطه تخصص
-            specialty_name = None
-            if doctor:
-                if hasattr(doctor, "specialty_relation") and doctor.specialty_relation:
-                    specialty_name = doctor.specialty_relation.name
-                elif hasattr(doctor, "specialty_id") and doctor.specialty_id:
-                    specialty_name = f"تخصص کد {doctor.specialty_id}"
-
-            items.append({
-                "id": appointment.id,
-                "status": appointment.status,
-                "doctor_name": (
-                    doctor.user.name
-                    if doctor and doctor.user
-                    else "نامشخص"
-                ),
-                "doctor_specialty": specialty_name,
-                "patient_name": appointment.patient.name if appointment.patient else "نامشخص",
-                "date": (
-                    availability.date.isoformat()
-                    if availability else None
-                ),
-                "start_time": (
-                    availability.start_time.strftime("%H:%M")
-                    if availability and availability.start_time else None
-                ),
-                "end_time": (
-                    availability.end_time.strftime("%H:%M")
-                    if availability and availability.end_time else None
-                ),
-                "notes": appointment.notes,
-            })
+        items = [
+            serialize_appointment(db=db, appointment=appointment)
+            for appointment in appointments
+        ]
 
         return {
             "success": True,
-            "items": items
+            "count": len(items),
+            "items": items,
         }
 
     except HTTPException:
         raise
-    except Exception as e:
+
+    except Exception as exc:
         traceback.print_exc()
         raise HTTPException(
-            status_code=500,
-            detail=f"خطای سرور در دریافت لیست نوبت‌ها: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"خطای سرور در دریافت لیست نوبت‌ها: {str(exc)}",
         )
 
 
@@ -435,40 +602,43 @@ def get_my_appointments(
 @router.put("/{appointment_id}/cancel")
 @router.patch("/{appointment_id}/cancel")
 def cancel_appointment(
-        appointment_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_user),
+    appointment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     appointment = get_locked_appointment(db, appointment_id)
 
     if current_user.role == "patient":
         if appointment.patient_id != current_user.id:
             raise HTTPException(
-                status_code=403,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="اجازه لغو این نوبت را ندارید.",
             )
+
     elif current_user.role == "doctor":
         doctor = get_current_doctor_profile(db, current_user)
+
         if appointment.doctor_id != doctor.id:
             raise HTTPException(
-                status_code=403,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="اجازه لغو این نوبت را ندارید.",
             )
+
     else:
         raise HTTPException(
-            status_code=403,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="دسترسی غیرمجاز.",
         )
 
     if appointment.status == "cancelled":
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="این نوبت قبلاً لغو شده.",
         )
 
     if appointment.status == "completed":
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="نوبت تکمیل شده قابل لغو نیست.",
         )
 
@@ -500,8 +670,8 @@ def cancel_appointment(
         db.rollback()
         traceback.print_exc()
         raise HTTPException(
-            status_code=500,
-            detail="خطا در فرآیند لغو نوبت در سرور.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"خطا در فرآیند لغو نوبت در سرور: {str(exc)}",
         )
 
 
@@ -512,39 +682,49 @@ def cancel_appointment(
 @router.put("/{appointment_id}/complete")
 @router.patch("/{appointment_id}/complete")
 def complete_appointment(
-        appointment_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_user),
+    appointment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     doctor = get_current_doctor_profile(db, current_user)
     appointment = get_locked_appointment(db, appointment_id)
 
     if appointment.doctor_id != doctor.id:
         raise HTTPException(
-            status_code=403,
-            detail="این نوبت متعلق به شما نیست."
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="این نوبت متعلق به شما نیست.",
         )
 
     if appointment.status == "cancelled":
         raise HTTPException(
-            status_code=400,
-            detail="نوبت لغوشده است و قابل انجام نیست."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="نوبت لغوشده است و قابل انجام نیست.",
         )
 
     if appointment.status == "completed":
         raise HTTPException(
-            status_code=400,
-            detail="این نوبت قبلاً تکمیل شده است."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="این نوبت قبلاً تکمیل شده است.",
         )
 
-    appointment.status = "completed"
-    db.commit()
-    db.refresh(appointment)
+    try:
+        appointment.status = "completed"
 
-    return {
-        "success": True,
-        "status": appointment.status
-    }
+        db.commit()
+        db.refresh(appointment)
+
+        return {
+            "success": True,
+            "status": appointment.status,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"خطا در تکمیل نوبت: {str(exc)}",
+        )
 
 
 # ==========================
@@ -554,65 +734,61 @@ def complete_appointment(
 @router.get("")
 @router.get("/")
 def get_all_appointments_filtered(
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    query = (
-        db.query(Appointment)
-        .options(
-            joinedload(Appointment.availability),
-            joinedload(Appointment.doctor).joinedload(Doctor.user),
-            joinedload(Appointment.patient),
-        )
-    )
+    """
+    دریافت همه نوبت‌های قابل مشاهده برای کاربر فعلی.
 
-    if current_user.role == "patient":
-        query = query.filter(Appointment.patient_id == current_user.id)
-    elif current_user.role == "doctor":
-        doctor = get_current_doctor_profile(db, current_user)
-        query = query.filter(Appointment.doctor_id == doctor.id)
-    else:
+    برای بیمار:
+    فقط نوبت‌های خودش.
+
+    برای پزشک:
+    نوبت‌های مربوط به پروفایل پزشک خودش.
+    """
+
+    try:
+        if current_user.role == "patient":
+            appointments = (
+                db.query(Appointment)
+                .filter(Appointment.patient_id == current_user.id)
+                .order_by(Appointment.id.desc())
+                .all()
+            )
+
+        elif current_user.role == "doctor":
+            doctor = get_current_doctor_profile(db, current_user)
+
+            appointments = (
+                db.query(Appointment)
+                .filter(Appointment.doctor_id == doctor.id)
+                .order_by(Appointment.id.desc())
+                .all()
+            )
+
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="دسترسی ندارید.",
+            )
+
+        items = [
+            serialize_appointment(db=db, appointment=appointment)
+            for appointment in appointments
+        ]
+
+        return {
+            "success": True,
+            "count": len(items),
+            "items": items,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        traceback.print_exc()
         raise HTTPException(
-            status_code=403,
-            detail="دسترسی ندارید."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"خطای سرور در دریافت نوبت‌ها: {str(exc)}",
         )
-
-    appointments = query.order_by(Appointment.id.desc()).all()
-    items = []
-
-    for item in appointments:
-        doctor = item.doctor
-        specialty_name = None
-        if doctor:
-            if hasattr(doctor, "specialty_relation") and doctor.specialty_relation:
-                specialty_name = doctor.specialty_relation.name
-            elif hasattr(doctor, "specialty_id") and doctor.specialty_id:
-                specialty_name = f"تخصص کد {doctor.specialty_id}"
-
-        items.append(
-            {
-                "id": item.id,
-                "status": item.status,
-                "patient_name": (
-                    item.patient.name
-                    if item.patient and item.patient.name
-                    else "نامشخص"
-                ),
-                "doctor_name": (
-                    item.doctor.user.name
-                    if item.doctor and item.doctor.user and item.doctor.user.name
-                    else "نامشخص"
-                ),
-                "doctor_specialty": specialty_name,
-                "date": item.availability.date.isoformat() if item.availability else None,
-                "start_time": item.availability.start_time.strftime(
-                    "%H:%M") if item.availability and item.availability.start_time else None,
-                "end_time": item.availability.end_time.strftime(
-                    "%H:%M") if item.availability and item.availability.end_time else None,
-            }
-        )
-
-    return {
-        "success": True,
-        "items": items
-    }
