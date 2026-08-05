@@ -1,4 +1,4 @@
-# Path: backend/app/api/routes/appointments.py
+# app/api/routes/appointments.py
 
 import traceback
 from datetime import date, timedelta, datetime, timezone
@@ -139,17 +139,11 @@ def get_locked_appointment(db: Session, appointment_id: int):
 # ==========================
 
 def execute_booking(
-    db: Session,
-    slot_id: int,
-    current_user: User,
-    notes: str | None = None,
+        db: Session,
+        slot_id: int,
+        current_user: User,
+        notes: str | None = None,
 ):
-    print("=" * 60)
-    print("BOOKING REQUEST")
-    print("slot_id =", slot_id)
-    print("user_id =", current_user.id)
-    print("=" * 60)
-
     if current_user.role != "patient":
         raise HTTPException(
             status_code=403,
@@ -169,14 +163,6 @@ def execute_booking(
                 status_code=404,
                 detail="زمان پیدا نشد.",
             )
-
-        print(
-            "FOUND SLOT:",
-            "id =", slot.id,
-            "doctor_id =", slot.doctor_id,
-            "booked =", slot.is_booked,
-            "available =", slot.is_available,
-        )
 
         if slot.is_booked or not slot.is_available:
             raise HTTPException(
@@ -238,12 +224,6 @@ def execute_booking(
         db.commit()
         db.refresh(appointment)
 
-        print(
-            "BOOKING SUCCESS:",
-            "appointment_id =", appointment.id,
-            "tracking_code =", appointment.tracking_code,
-        )
-
         return appointment
 
     except HTTPException:
@@ -252,11 +232,7 @@ def execute_booking(
 
     except Exception as exc:
         db.rollback()
-        print("=" * 60)
-        print("BOOKING ERROR")
-        print(repr(exc))
         traceback.print_exc()
-        print("=" * 60)
         raise HTTPException(
             status_code=500,
             detail="خطای داخلی هنگام رزرو نوبت در دیتابیس.",
@@ -272,10 +248,10 @@ def execute_booking(
     response_model=DoctorScheduleResponse
 )
 def get_doctor_schedule_grid(
-    doctor_id: int,
-    start_date: Optional[date] = None,
-    days_limit: int = Query(default=14, ge=1, le=90),
-    db: Session = Depends(get_db),
+        doctor_id: int,
+        start_date: Optional[date] = None,
+        days_limit: int = Query(default=14, ge=1, le=90),
+        db: Session = Depends(get_db),
 ):
     if start_date is None:
         start_date = date.today()
@@ -300,8 +276,8 @@ def get_doctor_schedule_grid(
     for slot in availabilities:
         item = SlotDetailOut(
             slot_id=slot.id,
-            start_time=slot.start_time.strftime("%H:%M"),
-            end_time=slot.end_time.strftime("%H:%M"),
+            start_time=slot.start_time.strftime("%H:%M") if slot.start_time else "00:00",
+            end_time=slot.end_time.strftime("%H:%M") if slot.end_time else "00:00",
             is_available=slot.is_available,
             is_booked=slot.is_booked,
         )
@@ -333,16 +309,10 @@ def get_doctor_schedule_grid(
     status_code=status.HTTP_201_CREATED
 )
 def create_appointment(
-    body: AppointmentCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        body: AppointmentCreate,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
-    print("=" * 60)
-    print("REQUEST BODY:", body.model_dump())
-    print("availability_id =", body.availability_id)
-    print("user_id =", current_user.id)
-    print("=" * 60)
-
     appointment = execute_booking(
         db,
         body.availability_id,
@@ -361,9 +331,9 @@ def create_appointment(
     status_code=status.HTTP_201_CREATED
 )
 def book_appointment_quick(
-    slot_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        slot_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     appointment = execute_booking(
         db,
@@ -383,35 +353,40 @@ def book_appointment_quick(
 
 @router.get("/me")
 def get_my_appointments(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
 ):
     try:
-        if current_user.role != "patient":
-            raise HTTPException(
-                status_code=403,
-                detail="فقط بیمار دسترسی دارد."
-            )
-
-        appointments = (
-            db.query(Appointment)
-            .options(
-                joinedload(Appointment.availability),
-                joinedload(Appointment.doctor)
-                .joinedload(Doctor.user),
-            )
-            .filter(
-                Appointment.patient_id == current_user.id
-            )
-            .order_by(Appointment.id.desc())
-            .all()
+        query = db.query(Appointment).options(
+            joinedload(Appointment.availability),
+            joinedload(Appointment.doctor).joinedload(Doctor.user),
+            joinedload(Appointment.patient)
         )
 
-        items = []
+        if current_user.role == "patient":
+            query = query.filter(Appointment.patient_id == current_user.id)
+        elif current_user.role == "doctor":
+            doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+            if not doctor:
+                raise HTTPException(status_code=404, detail="پروفایل پزشک پیدا نشد.")
+            query = query.filter(Appointment.doctor_id == doctor.id)
+        else:
+            raise HTTPException(status_code=403, detail="دسترسی غیرمجاز.")
 
+        appointments = query.order_by(Appointment.id.desc()).all()
+
+        items = []
         for appointment in appointments:
             availability = appointment.availability
             doctor = appointment.doctor
+
+            # استخراج نام تخصص در صورت وجود رابطه تخصص
+            specialty_name = None
+            if doctor:
+                if hasattr(doctor, "specialty_relation") and doctor.specialty_relation:
+                    specialty_name = doctor.specialty_relation.name
+                elif hasattr(doctor, "specialty_id") and doctor.specialty_id:
+                    specialty_name = f"تخصص کد {doctor.specialty_id}"
 
             items.append({
                 "id": appointment.id,
@@ -421,20 +396,19 @@ def get_my_appointments(
                     if doctor and doctor.user
                     else "نامشخص"
                 ),
-                "doctor_specialty": (
-                    doctor.specialty if doctor else None
-                ),
+                "doctor_specialty": specialty_name,
+                "patient_name": appointment.patient.name if appointment.patient else "نامشخص",
                 "date": (
                     availability.date.isoformat()
                     if availability else None
                 ),
                 "start_time": (
                     availability.start_time.strftime("%H:%M")
-                    if availability else None
+                    if availability and availability.start_time else None
                 ),
                 "end_time": (
                     availability.end_time.strftime("%H:%M")
-                    if availability else None
+                    if availability and availability.end_time else None
                 ),
                 "notes": appointment.notes,
             })
@@ -446,14 +420,11 @@ def get_my_appointments(
 
     except HTTPException:
         raise
-
     except Exception as e:
-        print("APPOINTMENTS ME ERROR:", repr(e))
         traceback.print_exc()
-
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=f"خطای سرور در دریافت لیست نوبت‌ها: {str(e)}"
         )
 
 
@@ -464,9 +435,9 @@ def get_my_appointments(
 @router.put("/{appointment_id}/cancel")
 @router.patch("/{appointment_id}/cancel")
 def cancel_appointment(
-    appointment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        appointment_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     appointment = get_locked_appointment(db, appointment_id)
 
@@ -527,11 +498,7 @@ def cancel_appointment(
 
     except Exception as exc:
         db.rollback()
-        print("=" * 60)
-        print("CANCEL ERROR")
-        print(repr(exc))
         traceback.print_exc()
-        print("=" * 60)
         raise HTTPException(
             status_code=500,
             detail="خطا در فرآیند لغو نوبت در سرور.",
@@ -545,9 +512,9 @@ def cancel_appointment(
 @router.put("/{appointment_id}/complete")
 @router.patch("/{appointment_id}/complete")
 def complete_appointment(
-    appointment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        appointment_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     doctor = get_current_doctor_profile(db, current_user)
     appointment = get_locked_appointment(db, appointment_id)
@@ -587,8 +554,8 @@ def complete_appointment(
 @router.get("")
 @router.get("/")
 def get_all_appointments_filtered(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     query = (
         db.query(Appointment)
@@ -614,6 +581,14 @@ def get_all_appointments_filtered(
     items = []
 
     for item in appointments:
+        doctor = item.doctor
+        specialty_name = None
+        if doctor:
+            if hasattr(doctor, "specialty_relation") and doctor.specialty_relation:
+                specialty_name = doctor.specialty_relation.name
+            elif hasattr(doctor, "specialty_id") and doctor.specialty_id:
+                specialty_name = f"تخصص کد {doctor.specialty_id}"
+
         items.append(
             {
                 "id": item.id,
@@ -621,19 +596,19 @@ def get_all_appointments_filtered(
                 "patient_name": (
                     item.patient.name
                     if item.patient and item.patient.name
-                    else "Unknown"
+                    else "نامشخص"
                 ),
                 "doctor_name": (
                     item.doctor.user.name
                     if item.doctor and item.doctor.user and item.doctor.user.name
-                    else "Unknown"
+                    else "نامشخص"
                 ),
-                "doctor_specialty": (
-                    item.doctor.specialty if item.doctor else None
-                ),
+                "doctor_specialty": specialty_name,
                 "date": item.availability.date.isoformat() if item.availability else None,
-                "start_time": item.availability.start_time.strftime("%H:%M") if item.availability else None,
-                "end_time": item.availability.end_time.strftime("%H:%M") if item.availability else None,
+                "start_time": item.availability.start_time.strftime(
+                    "%H:%M") if item.availability and item.availability.start_time else None,
+                "end_time": item.availability.end_time.strftime(
+                    "%H:%M") if item.availability and item.availability.end_time else None,
             }
         )
 
