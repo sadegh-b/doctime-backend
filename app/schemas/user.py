@@ -1,4 +1,4 @@
-# Path: app/schemas/user.py
+# app/schemas/user.py
 
 import re
 from datetime import date, time
@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 UserRole = Literal["patient", "doctor", "admin"]
 WorkShift = Literal["morning", "afternoon", "both"]
 
-
 PERSIAN_DIGITS = "".join(chr(1776 + i) for i in range(10))
 ARABIC_DIGITS = "".join(chr(1632 + i) for i in range(10))
 ENGLISH_DIGITS = "0123456789"
@@ -18,7 +17,6 @@ DIGIT_TRANSLATION_TABLE = str.maketrans(
     PERSIAN_DIGITS + ARABIC_DIGITS,
     ENGLISH_DIGITS + ENGLISH_DIGITS,
 )
-
 
 DAY_ALIASES = {
     "شنبه": "شنبه",
@@ -37,25 +35,27 @@ DAY_ALIASES = {
 }
 
 
-def normalize_digits(value: str) -> str:
+def normalize_digits(value: Optional[str]) -> Optional[str]:
     if value is None:
-        return value
-    return value.translate(DIGIT_TRANSLATION_TABLE)
+        return None
+    return str(value).translate(DIGIT_TRANSLATION_TABLE)
 
 
-def normalize_spaces(value: str) -> str:
+def normalize_spaces(value: Optional[str]) -> Optional[str]:
     if value is None:
-        return value
-    return " ".join(value.replace("\u200c", " ").split())
+        return None
+    return " ".join(str(value).replace("\u200c", " ").split())
 
 
 def normalize_day_name(value: str) -> str:
+    if value is None:
+        return value
     value = normalize_spaces(value)
     return DAY_ALIASES.get(value, value)
 
 
 def is_valid_iranian_national_id(value: str) -> bool:
-    if not re.fullmatch(r"\d{10}", value):
+    if not value or not re.fullmatch(r"\d{10}", value):
         return False
 
     if len(set(value)) == 1:
@@ -75,7 +75,6 @@ class UserRegister(BaseModel):
     name: str
     phone: str
     password: str
-    # تغییر به اختیاری بودن در سطح ورودی
     national_id: Optional[str] = None
     email: Optional[str] = None
 
@@ -105,6 +104,8 @@ class UserRegister(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
+        if not value or not str(value).strip():
+            raise ValueError("نام و نام خانوادگی الزامی است.")
         value = normalize_spaces(value)
         if len(value) < 2:
             raise ValueError("نام باید حداقل ۲ کاراکتر باشد.")
@@ -113,55 +114,72 @@ class UserRegister(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: str) -> str:
-        value = normalize_digits(value.strip())
-        if not re.fullmatch(r"09\d{9}", value):
+        if not value or not str(value).strip():
+            raise ValueError("شماره موبایل الزامی است.")
+
+        normalized = normalize_digits(value.strip())
+        normalized = re.sub(r"\s+", "", normalized)
+
+        if not re.fullmatch(r"09\d{9}", normalized):
             raise ValueError("شماره موبایل باید با 09 شروع شود و دقیقاً ۱۱ رقم باشد.")
-        return value
+        return normalized
 
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str) -> str:
-        if len(value) < 6:
+        if not value or len(value) < 6:
             raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
         return value
 
     @field_validator("national_id")
     @classmethod
     def validate_national_id(cls, value: Optional[str]) -> Optional[str]:
-        if not value:
+        if value is None:
             return None
-        value = normalize_digits(value.strip())
-        if value == "":
+
+        cleaned = value.strip()
+        if not cleaned:
             return None
-        if not is_valid_iranian_national_id(value):
+
+        normalized = normalize_digits(cleaned)
+        normalized = re.sub(r"\s+", "", normalized)
+
+        if not is_valid_iranian_national_id(normalized):
             raise ValueError("کد ملی معتبر نیست.")
-        return value
+        return normalized
 
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: Optional[str]) -> Optional[str]:
-        if not value:
+        if value is None:
             return None
-        value = value.strip().lower()
+
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+
         email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-        if not re.match(email_regex, value):
+        if not re.match(email_regex, cleaned):
             raise ValueError("فرمت ایمیل وارد شده معتبر نیست.")
-        return value
+        return cleaned
 
     @field_validator("medical_council_number")
     @classmethod
     def validate_medical_council_number(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
-            return value
-
-        value = normalize_digits(value.strip())
-        if not value:
             return None
 
-        if not re.fullmatch(r"\d{4,10}", value):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        normalized = normalize_digits(cleaned)
+        normalized = re.sub(r"\s+", "", normalized)
+
+        if not re.fullmatch(r"\d{4,10}", normalized):
             raise ValueError("کد نظام پزشکی باید بین ۴ تا ۱۰ رقم باشد.")
 
-        return value
+        return normalized
 
     @field_validator("specialty_id")
     @classmethod
@@ -190,10 +208,12 @@ class UserRegister(BaseModel):
     @classmethod
     def validate_work_days(cls, value: Optional[List[str]]) -> Optional[List[str]]:
         if value is None:
-            return value
+            return None
 
         cleaned_days = []
         for day in value:
+            if not day:
+                continue
             normalized_day = normalize_day_name(day)
             if normalized_day not in DAY_ALIASES.values():
                 raise ValueError(f"روز کاری نامعتبر است: {day}")
@@ -211,10 +231,13 @@ class UserRegister(BaseModel):
     @classmethod
     def normalize_optional_string(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
-            return value
+            return None
 
-        value = normalize_digits(value.strip())
-        return value or None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        return normalize_digits(cleaned)
 
     @field_validator(
         "sub_specialty",
@@ -226,16 +249,19 @@ class UserRegister(BaseModel):
     @classmethod
     def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
-            return value
-        value = normalize_spaces(value)
-        return value or None
+            return None
+
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        return normalize_spaces(cleaned)
 
     @model_validator(mode="after")
     def validate_doctor_fields(self):
         if self.role != "doctor":
             return self
 
-        # کد ملی برای پزشک اجباری است
         if not self.national_id:
             raise ValueError("کد ملی برای پزشک الزامی است.")
 
