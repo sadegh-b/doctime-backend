@@ -1,4 +1,4 @@
-# app/api/routes/auth.py
+# Path: backend/app/api/routes/auth.py
 
 import logging
 import os
@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_db
@@ -23,14 +23,33 @@ from app.schemas.user import DoctorOut, UserOut, UserRegister
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
 
-# فقط در development کد OTP را به کلاینت برگردان.
-IS_DEBUG = os.getenv("ENV", "development").lower() in (
+
+# ============================================================
+# Environment / Debug Flags
+# ============================================================
+
+ENV_NAME = os.getenv("ENV", "development").lower()
+
+IS_DEBUG = ENV_NAME in (
     "development",
     "dev",
     "local",
     "true",
     "1",
 )
+
+# اگر روی Render خواستی موقتاً جزئیات خطای 500 را در Response ببینی:
+# REGISTRATION_DEBUG_DETAIL=true
+REGISTRATION_DEBUG_DETAIL = os.getenv(
+    "REGISTRATION_DEBUG_DETAIL",
+    "false",
+).lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+
 
 PERSIAN_DAY_TO_WEEKDAY = {
     "دوشنبه": 0,
@@ -46,13 +65,14 @@ PERSIAN_DAY_TO_WEEKDAY = {
 }
 
 
-# =========================
+# ============================================================
 # Normalization Helpers
-# =========================
+# ============================================================
 
 def to_english_digits(value: Optional[str]) -> Optional[str]:
     """
     تبدیل ارقام فارسی/عربی به انگلیسی.
+
     Example:
         ۰۹۱۲۳۴۵۶۷۸۹ -> 09123456789
     """
@@ -75,7 +95,7 @@ def to_english_digits(value: Optional[str]) -> Optional[str]:
 
 def empty_to_none(value: Optional[str]) -> Optional[str]:
     """
-    رشته خالی، فاصله، None را به None تبدیل می‌کند.
+    رشته خالی، فاصله و None را به None تبدیل می‌کند.
     """
     if value is None:
         return None
@@ -122,6 +142,7 @@ def normalize_optional_text(value: Optional[str]) -> Optional[str]:
 
 def normalize_optional_email(value: Optional[str]) -> Optional[str]:
     cleaned = empty_to_none(value)
+
     if not cleaned:
         return None
 
@@ -131,6 +152,7 @@ def normalize_optional_email(value: Optional[str]) -> Optional[str]:
 def normalize_user_register_data(user_data: UserRegister) -> UserRegister:
     """
     داده ثبت‌نام را سمت بک‌اند هم تمیز می‌کنیم.
+
     نکته مهم:
     حتی اگر فرانت درست بفرستد، بک‌اند نباید به فرانت اعتماد کند.
     """
@@ -188,9 +210,24 @@ def get_integrity_error_detail(exc: IntegrityError) -> str:
     return "اطلاعات وارد شده با داده‌های موجود در دیتابیس تداخل دارد."
 
 
-# =========================
+def build_internal_error_detail(exc: Exception) -> str:
+    """
+    فقط برای debug کنترل‌شده.
+
+    در Production عادی نباید جزئیات خطای دیتابیس به کلاینت داده شود.
+    ولی برای پیدا کردن مشکل Render می‌توانی موقتاً این env را فعال کنی:
+
+        REGISTRATION_DEBUG_DETAIL=true
+    """
+    if not REGISTRATION_DEBUG_DETAIL:
+        return "خطای داخلی سرور رخ داد."
+
+    return f"{type(exc).__name__}: {str(exc)}"
+
+
+# ============================================================
 # Validation Helpers
-# =========================
+# ============================================================
 
 def split_full_name(full_name: str) -> tuple[str, str]:
     cleaned = (full_name or "").strip()
@@ -233,13 +270,15 @@ def parse_date_str(value: Optional[str]) -> date:
     if not value:
         return date.today()
 
+    normalized_value = str(value).strip()
+
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return datetime.strptime(normalized_value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"فرمت تاریخ نامعتبر است: {value}. "
+                f"فرمت تاریخ نامعتبر است: {normalized_value}. "
                 "فرمت درست مثل 2026-07-25 است."
             ),
         ) from exc
@@ -256,7 +295,10 @@ def validate_time_range(start: time, end: time, title: str) -> None:
 def validate_doctor_registration_data(user_data: UserRegister) -> None:
     """
     فقط برای پزشک سخت‌گیری می‌کنیم.
-    برای بیمار، national_id اختیاری است.
+
+    بسیار مهم:
+    برای بیمار نباید national_id، specialty_id، work_days یا medical_council_number
+    اجباری شود.
     """
     if user_data.role != "doctor":
         return
@@ -325,22 +367,76 @@ def validate_doctor_registration_data(user_data: UserRegister) -> None:
         validate_time_range(afternoon_start, afternoon_end, "شیفت عصر")
 
 
-# =========================
+# ============================================================
 # Response Builders
-# =========================
+# ============================================================
+
+def get_safe_specialty_name(
+    db: Session,
+    doctor: Doctor,
+) -> str:
+    """
+    نام تخصص را امن می‌خوانیم.
+
+    دلیل:
+    اگر رابطه ORM یا دیتابیس Production هنوز مشکل داشته باشد،
+    نباید ساخت Response کل ثبت‌نام را نابود کند.
+    """
+    if not doctor.specialty_id:
+        return "نامشخص"
+
+    try:
+        specialty = db.get(Specialty, doctor.specialty_id)
+
+        if specialty and specialty.name:
+            return specialty.name
+
+        return "نامشخص"
+
+    except SQLAlchemyError:
+        logger.exception(
+            "Failed to load specialty name for doctor_id=%s specialty_id=%s",
+            getattr(doctor, "id", None),
+            getattr(doctor, "specialty_id", None),
+        )
+        return "نامشخص"
+
 
 def build_user_response(
     user: User,
     doctor: Optional[Doctor] = None,
     message: str = "OK",
     token: Optional[TokenResponse] = None,
+    db: Optional[Session] = None,
 ) -> UserResponse:
+    """
+    خروجی یکسان برای register/login/me.
+
+    برای بیمار:
+        UserOut ساخته می‌شود.
+
+    برای پزشک:
+        DoctorOut ساخته می‌شود.
+
+    نکته:
+    اگر db داده شود، نام تخصص را با query امن می‌گیریم.
+    """
     if doctor:
-        specialty_name = (
-            doctor.specialty_relation.name
-            if doctor.specialty_relation
-            else "نامشخص"
-        )
+        if db is not None:
+            specialty_name = get_safe_specialty_name(db, doctor)
+        else:
+            try:
+                specialty_name = (
+                    doctor.specialty_relation.name
+                    if doctor.specialty_relation
+                    else "نامشخص"
+                )
+            except SQLAlchemyError:
+                logger.exception(
+                    "Failed to load doctor.specialty_relation for doctor_id=%s",
+                    getattr(doctor, "id", None),
+                )
+                specialty_name = "نامشخص"
 
         user_out = DoctorOut(
             id=user.id,
@@ -381,22 +477,37 @@ def build_user_response(
     )
 
 
-# =========================
+# ============================================================
 # Doctor Helpers
-# =========================
+# ============================================================
 
 def create_doctor_profile(
     db: Session,
     user: User,
     user_data: UserRegister,
 ) -> Doctor:
+    """
+    پروفایل پزشک را می‌سازد.
+
+    فقط وقتی صدا زده می‌شود که role == doctor باشد.
+    """
     if user_data.specialty_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="شناسه تخصص برای ثبت‌نام پزشک الزامی است.",
         )
 
-    specialty = db.get(Specialty, user_data.specialty_id)
+    try:
+        specialty = db.get(Specialty, user_data.specialty_id)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "Failed to query specialties table. specialty_id=%s",
+            user_data.specialty_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=build_internal_error_detail(exc),
+        ) from exc
 
     if specialty is None:
         raise HTTPException(
@@ -433,6 +544,12 @@ def create_doctor_availabilities(
     days_count: int = 30,
     slot_minutes: int = 30,
 ) -> None:
+    """
+    اسلات‌های اولیه پزشک را می‌سازد.
+
+    بسیار مهم:
+    این تابع برای بیمار هیچ کاری نمی‌کند.
+    """
     if user_data.role != "doctor":
         return
 
@@ -469,36 +586,47 @@ def create_doctor_availabilities(
             "ساعت پایان شیفت عصر",
         )
 
-    for day_offset in range(days_count):
-        current_date = start_date + timedelta(days=day_offset)
+    try:
+        for day_offset in range(days_count):
+            current_date = start_date + timedelta(days=day_offset)
 
-        if current_date.weekday() not in selected_weekdays:
-            continue
+            if current_date.weekday() not in selected_weekdays:
+                continue
 
-        if morning_start and morning_end:
-            create_slots_for_range(
-                db=db,
-                doctor_id=doctor_id,
-                slot_date=current_date,
-                start_time=morning_start,
-                end_time=morning_end,
-                slot_minutes=slot_minutes,
-            )
+            if morning_start and morning_end:
+                create_slots_for_range(
+                    db=db,
+                    doctor_id=doctor_id,
+                    slot_date=current_date,
+                    start_time=morning_start,
+                    end_time=morning_end,
+                    slot_minutes=slot_minutes,
+                )
 
-        if afternoon_start and afternoon_end:
-            create_slots_for_range(
-                db=db,
-                doctor_id=doctor_id,
-                slot_date=current_date,
-                start_time=afternoon_start,
-                end_time=afternoon_end,
-                slot_minutes=slot_minutes,
-            )
+            if afternoon_start and afternoon_end:
+                create_slots_for_range(
+                    db=db,
+                    doctor_id=doctor_id,
+                    slot_date=current_date,
+                    start_time=afternoon_start,
+                    end_time=afternoon_end,
+                    slot_minutes=slot_minutes,
+                )
+
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "Failed to create doctor availabilities. doctor_id=%s",
+            doctor_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=build_internal_error_detail(exc),
+        ) from exc
 
 
-# =========================
+# ============================================================
 # Routes
-# =========================
+# ============================================================
 
 @router.post("/otp/send", status_code=status.HTTP_200_OK)
 def send_otp(payload: OTPRequest, db: Session = Depends(get_db)):
@@ -548,6 +676,26 @@ def register_user(
     otp_code: str = Query(..., description="کد اعتبارسنجی پیامکی"),
     db: Session = Depends(get_db),
 ):
+    """
+    ثبت‌نام کاربر.
+
+    مسیر بیمار:
+        - ساخت User
+        - verify کردن OTP
+        - commit
+        - ساخت UserOut
+
+    مسیر پزشک:
+        - ساخت User
+        - ساخت Doctor
+        - ساخت Availability
+        - verify کردن OTP
+        - commit
+        - ساخت DoctorOut
+
+    هدف:
+        خطای پزشک نباید ثبت‌نام بیمار را خراب کند.
+    """
     user_data = normalize_user_register_data(user_data)
     validate_doctor_registration_data(user_data)
 
@@ -576,7 +724,6 @@ def register_user(
             detail="کد تایید منقضی شده است.",
         )
 
-    # بررسی تکراری بودن کاربر با پیام دقیق
     duplicate_filters = User.phone == user_data.phone
 
     if user_data.national_id:
@@ -669,6 +816,7 @@ def register_user(
                 access_token=access_token,
                 token_type="bearer",
             ),
+            db=db,
         )
 
     except HTTPException:
@@ -685,13 +833,22 @@ def register_user(
             detail=detail,
         ) from exc
 
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Database error during registration")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=build_internal_error_detail(exc),
+        ) from exc
+
     except Exception as exc:
         db.rollback()
         logger.exception("Registration error")
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="خطای داخلی سرور رخ داد.",
+            detail=build_internal_error_detail(exc),
         ) from exc
 
 
@@ -728,6 +885,7 @@ def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
             access_token=access_token,
             token_type="bearer",
         ),
+        db=db,
     )
 
 
@@ -745,6 +903,7 @@ def get_me(
         user=current_user,
         doctor=doctor,
         message="اطلاعات کاربر دریافت شد.",
+        db=db,
     )
 
 
