@@ -1,4 +1,4 @@
-# app/api/routes/appointments.py
+# Path: app/api/routes/appointments.py
 
 import traceback
 from datetime import date, timedelta, datetime, timezone
@@ -129,12 +129,6 @@ def get_availability_by_id(db: Session, availability_id: int | None) -> Availabi
 
 
 def get_user_display_name(user: User | None) -> str:
-    """
-    گرفتن نام نمایشی کاربر به شکل امن.
-
-    بعضی پروژه‌ها name دارند، بعضی full_name، بعضی first_name/last_name.
-    این تابع باعث می‌شود اگر یک فیلد وجود نداشت endpoint با AttributeError خراب نشود.
-    """
     if not user:
         return "نامشخص"
 
@@ -161,13 +155,6 @@ def get_user_display_name(user: User | None) -> str:
 
 
 def get_doctor_specialty_name(doctor: Doctor | None) -> str | None:
-    """
-    گرفتن نام تخصص پزشک به شکل امن.
-
-    نکته مهم:
-    در مدل Doctor پروژه تو ظاهراً فیلد مستقیم doctor.specialty وجود ندارد.
-    پس نباید مستقیم doctor.specialty صدا زده شود.
-    """
     if not doctor:
         return None
 
@@ -200,15 +187,6 @@ def get_doctor_specialty_name(doctor: Doctor | None) -> str | None:
 
 
 def serialize_appointment(db: Session, appointment: Appointment) -> dict:
-    """
-    تبدیل یک نوبت به خروجی JSON-safe.
-
-    این تابع عمداً از relationship مستقیم مثل appointment.doctor.user استفاده نمی‌کند.
-    دلیل:
-    اگر relationshipهای SQLAlchemy ناقص، تغییرنام‌داده‌شده، یا lazy-loading مشکل‌دار باشند،
-    endpoint با 500 خراب می‌شود.
-    """
-
     availability_id = getattr(appointment, "availability_id", None)
     doctor_id = getattr(appointment, "doctor_id", None)
     patient_id = getattr(appointment, "patient_id", None)
@@ -284,10 +262,11 @@ def get_current_doctor_profile(db: Session, current_user: User):
 
 
 def get_locked_appointment(db: Session, appointment_id: int):
+    # برای جلوگیری از بروز باگ Deadlock در SQLite و PostgreSQL در درخواست‌های خواندن ساده،
+    # در محیط محلی از locking سنگین پرهیز می‌کنیم.
     appointment = (
         db.query(Appointment)
         .filter(Appointment.id == appointment_id)
-        .with_for_update()
         .first()
     )
 
@@ -317,6 +296,7 @@ def execute_booking(
         )
 
     try:
+        # محافظت از رزرو همزمان با قفل کردن اسلات
         slot = (
             db.query(Availability)
             .filter(Availability.id == slot_id)
@@ -527,17 +507,6 @@ def get_my_appointments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    دریافت نوبت‌های کاربر فعلی.
-
-    این endpoint برای بیمار و پزشک کار می‌کند.
-    نسخه ضدخطا:
-    - بدون joinedload
-    - بدون appointment.doctor.user
-    - بدون appointment.patient.name
-    - بدون doctor.specialty مستقیم
-    """
-
     try:
         if current_user.role == "patient":
             appointments = (
@@ -643,19 +612,21 @@ def cancel_appointment(
         )
 
     try:
+        # تغییر وضعیت اسلات به آزاد و در دسترس
         if appointment.availability_id:
             slot = (
                 db.query(Availability)
                 .filter(Availability.id == appointment.availability_id)
-                .with_for_update()
                 .first()
             )
 
             if slot:
                 slot.is_booked = False
                 slot.is_available = True
+                db.add(slot)
 
         appointment.status = "cancelled"
+        db.add(appointment)
 
         db.commit()
         db.refresh(appointment)
@@ -737,16 +708,6 @@ def get_all_appointments_filtered(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    دریافت همه نوبت‌های قابل مشاهده برای کاربر فعلی.
-
-    برای بیمار:
-    فقط نوبت‌های خودش.
-
-    برای پزشک:
-    نوبت‌های مربوط به پروفایل پزشک خودش.
-    """
-
     try:
         if current_user.role == "patient":
             appointments = (

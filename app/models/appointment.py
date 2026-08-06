@@ -1,4 +1,4 @@
-# مسیر فایل: backend/app/models/appointment.py
+# Path: backend/app/models/appointment.py
 
 from datetime import datetime, timezone
 import random
@@ -28,10 +28,12 @@ class Appointment(Base):
         nullable=False,
     )
 
-    # قید unique=True برداشته شد تا امکان ثبت نوبت جدید پس از لغو نوبت قبلی روی همین اسلات فراهم شود.
+    # قید unique=True در سطح SQLAlchemy برداشته شد.
+    # توجه: برای حذف نهایی در دیتابیس، اجرای alembic migration اجباری است.
     availability_id: Mapped[int] = mapped_column(
         ForeignKey("availabilities.id", ondelete="CASCADE"),
         nullable=False,
+        unique=False,  # به صورت صریح روی False قرار گرفت
     )
 
     status: Mapped[str] = mapped_column(
@@ -76,7 +78,7 @@ class Appointment(Base):
         foreign_keys=[doctor_id],
     )
 
-    # تنظیم رابطه به صورت بک‌پاپولیت با appointments در مدل Availability
+    # رابطه بک‌پاپولیت با appointments در مدل Availability برقرار است
     availability = relationship(
         "Availability",
         back_populates="appointments",

@@ -1,33 +1,134 @@
-# Path: alembic/versions/404ad212a21d_remove_unique_constraint_from_.py
-
-"""remove unique constraint from availability id
+"""remove unique constraint from appointment availability
 
 Revision ID: 404ad212a21d
 Revises: 2026_08_05_sync
-Create Date: 2026-08-06 13:15:00.000000
-
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
+from sqlalchemy import MetaData, Table, UniqueConstraint, inspect
 
 
-# revision identifiers, used by Alembic.
-revision: str = '404ad212a21d'
-down_revision: Union[str, None] = '2026_08_05_sync'
+revision: str = "404ad212a21d"
+down_revision: Union[str, None] = "2026_08_05_sync"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    # بازسازی جدول بدون نیاز به پاس دادن نام قید غیرموجود.
-    # المبیک با اجرای pass در بدنه batch_alter_table، جدول را بر اساس ساختار مدل‌های جدید (بدون unique) مجدداً می‌سازد.
-    with op.batch_alter_table('appointments', schema=None) as batch_op:
+TABLE_NAME = "appointments"
+COLUMN_NAME = "availability_id"
+POSTGRES_CONSTRAINT_NAME = "appointments_availability_id_key"
+MIGRATION_CONSTRAINT_NAME = "uq_appointments_availability_id"
+
+
+def _get_availability_unique_constraint():
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    unique_constraints = inspector.get_unique_constraints(TABLE_NAME)
+
+    for constraint in unique_constraints:
+        column_names = constraint.get("column_names") or []
+
+        if column_names == [COLUMN_NAME]:
+            return constraint
+
+    return None
+
+
+def _remove_sqlite_unique_constraint() -> None:
+    bind = op.get_bind()
+    metadata = MetaData()
+
+    appointments_table = Table(
+        TABLE_NAME,
+        metadata,
+        autoload_with=bind,
+    )
+
+    unique_constraint_found = False
+
+    for constraint in list(appointments_table.constraints):
+        if not isinstance(constraint, UniqueConstraint):
+            continue
+
+        constrained_columns = [column.name for column in constraint.columns]
+
+        if constrained_columns == [COLUMN_NAME]:
+            appointments_table.constraints.remove(constraint)
+            unique_constraint_found = True
+
+    if not unique_constraint_found:
+        return
+
+    # SQLite cannot directly drop an anonymous UNIQUE constraint.
+    # Alembic recreates the table, copies all rows and omits this constraint.
+    with op.batch_alter_table(
+        TABLE_NAME,
+        schema=None,
+        recreate="always",
+        copy_from=appointments_table,
+    ):
         pass
 
 
+def upgrade() -> None:
+    bind = op.get_bind()
+    dialect_name = bind.dialect.name
+    unique_constraint = _get_availability_unique_constraint()
+
+    # The migration is intentionally idempotent.
+    if unique_constraint is None:
+        return
+
+    if dialect_name == "sqlite":
+        _remove_sqlite_unique_constraint()
+        return
+
+    constraint_name = unique_constraint.get("name")
+
+    if not constraint_name:
+        raise RuntimeError(
+            "The availability_id unique constraint exists but has no name."
+        )
+
+    op.drop_constraint(
+        constraint_name,
+        TABLE_NAME,
+        type_="unique",
+    )
+
+
 def downgrade() -> None:
-    # در صورت برگشت مایگریشن، قید یکتایی را دوباره به ستون اضافه می‌کنیم.
-    with op.batch_alter_table('appointments', schema=None) as batch_op:
-        batch_op.create_unique_constraint('uq_appointments_availability_id', ['availability_id'])
+    bind = op.get_bind()
+    dialect_name = bind.dialect.name
+    unique_constraint = _get_availability_unique_constraint()
+
+    if unique_constraint is not None:
+        return
+
+    constraint_name = (
+        POSTGRES_CONSTRAINT_NAME
+        if dialect_name == "postgresql"
+        else MIGRATION_CONSTRAINT_NAME
+    )
+
+    if dialect_name == "sqlite":
+        with op.batch_alter_table(
+            TABLE_NAME,
+            schema=None,
+            recreate="always",
+        ) as batch_op:
+            batch_op.create_unique_constraint(
+                constraint_name,
+                [COLUMN_NAME],
+            )
+        return
+
+    op.create_unique_constraint(
+        constraint_name,
+        TABLE_NAME,
+        [COLUMN_NAME],
+    )
