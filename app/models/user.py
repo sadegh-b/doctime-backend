@@ -1,9 +1,13 @@
 # app/models/user.py
+
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import Boolean, DateTime, String, Integer
+
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.database.base import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -29,7 +33,7 @@ class User(Base):
         nullable=False,
     )
 
-    # تغییر به nullable=True برای پشتیبانی از ثبت‌نام بیماران بدون کد ملی
+    # National ID is nullable to support users without national ID during some registration flows.
     national_id: Mapped[Optional[str]] = mapped_column(
         String(10),
         unique=True,
@@ -87,6 +91,21 @@ class User(Base):
         foreign_keys="[Appointment.patient_id]",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def phone_number(self) -> str:
+        """
+        Compatibility property for response schemas that expect `phone_number`.
+
+        Database/model field name:
+            user.phone
+
+        API/schema expected field name:
+            user.phone_number
+
+        This prevents FastAPI ResponseValidationError when serializing nested User objects.
+        """
+        return self.phone
 
     def __repr__(self) -> str:
         return f"<User {self.phone} - {self.role}>"
