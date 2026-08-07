@@ -1,15 +1,16 @@
+# alembic/versions/f8d3c1a9e03c_force_drop_appointments_availability_unique.py
+
 """force drop appointments availability unique constraint
 
-Revision ID: 2026_08_06_force_drop_availability_unique
+Revision ID: f8d3c1a9e03c
 Revises: 404ad212a21d
 """
 
 from typing import Sequence, Union
-
 from alembic import op
 
-
-revision: str = "2026_08_06_force_drop_availability_unique"
+# Revision identifiers, used by Alembic.
+revision: str = "f8d3c1a9e03c"
 down_revision: Union[str, None] = "404ad212a21d"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
