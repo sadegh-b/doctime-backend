@@ -1,3 +1,5 @@
+# مسیر قرارگیری فایل: backend/app/main.py
+
 import logging
 from os import getenv
 
@@ -5,26 +7,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
+from app.core.logging_config import setup_logging
+
+# 1. تنظیم و پیکربندی سیستم لاگینگ متمرکز (کنسول + فایل)
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # Import database models before Base.metadata.create_all().
-# noqa: F401 means these imports are intentional, even if not used directly.
+# تمام ایمپورت‌ها صریح و بدون بلاک‌های try-except پنهان‌کننده خطا نوشته شده‌اند.
 # -----------------------------------------------------------------------------
 
 from app.models.user import User  # noqa: F401
 from app.models.doctor import Doctor, Specialty  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
 from app.models.consultation import ConsultationRequest  # noqa: F401
+from app.models.otp import OTPVerification  # noqa: F401
+from app.models.appointment import Appointment  # noqa: F401
+from app.models.wallet import Wallet, Transaction  # noqa: F401
 
-try:
-    from app.models.appointment import Appointment  # noqa: F401
-except ImportError:
-    pass
-
+# اگر ماژول Review در کل سیستم وجود ندارد یا حذف شده است،
+# خط زیر و روت مربوط به آن در پایین فایل باید کامنت یا حذف شوند.
 try:
     from app.models.review import Review  # noqa: F401
 except ImportError:
-    pass
+    logger.warning("Warning: app.models.review could not be imported. Ensure the file exists.")
 
 # -----------------------------------------------------------------------------
 # Routers
@@ -35,19 +42,16 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.availability import router as availability_router
 from app.api.routes.consultations import router as consultations_router
 from app.api.routes.doctors import router as doctors_router
-from app.api.routes.reviews import router as reviews_router
 from app.api.routes.specialties import router as specialties_router
+from app.api.routes.wallet import router as wallet_router
 
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-
-logger = logging.getLogger(__name__)
+# برای جلوگیری از کرش در صورت نبودن روت کامنت‌ها (Reviews)
+try:
+    from app.api.routes.reviews import router as reviews_router
+    HAS_REVIEWS = True
+except ImportError:
+    logger.warning("Warning: app.api.routes.reviews could not be imported.")
+    HAS_REVIEWS = False
 
 API_PREFIX = "/api/v1"
 
@@ -126,7 +130,6 @@ def api_v1_root() -> dict[str, str]:
 
 # -----------------------------------------------------------------------------
 # API routers
-# Every route file already has its own prefix, for example /auth or /doctors.
 # -----------------------------------------------------------------------------
 
 app.include_router(auth_router, prefix=API_PREFIX)
@@ -134,8 +137,13 @@ app.include_router(doctors_router, prefix=API_PREFIX)
 app.include_router(specialties_router, prefix=API_PREFIX)
 app.include_router(appointments_router, prefix=API_PREFIX)
 app.include_router(availability_router, prefix=API_PREFIX)
-app.include_router(reviews_router, prefix=API_PREFIX)
 app.include_router(consultations_router, prefix=API_PREFIX)
+app.include_router(wallet_router, prefix=API_PREFIX)
+
+if HAS_REVIEWS:
+    app.include_router(reviews_router, prefix=API_PREFIX)
+else:
+    logger.warning("Skipping reviews_router registration due to import failure.")
 
 
 # -----------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # Path: app/api/routes/appointments.py
 
-import traceback
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -11,21 +11,24 @@ from pydantic import BaseModel
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, get_db
+from app.api.dependencies import get_current_user
+from app.database import get_db
+from app.core.logger import get_logger
 from app.models.appointment import Appointment
 from app.models.availability import Availability
 from app.models.doctor import Doctor
 from app.models.user import User
+from app.models.wallet import Transaction, TransactionType
+from app.services.wallet_service import WalletService
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/appointments",
     tags=["Appointments"],
 )
 
-ACTIVE_APPOINTMENT_STATUSES = {
-    "pending",
-    "confirmed",
-}
+ACTIVE_APPOINTMENT_STATUSES = {"pending", "confirmed"}
 
 WEEKDAY_TO_PERSIAN = {
     0: "دوشنبه",
@@ -52,10 +55,6 @@ JALALI_MONTHS = [
     "اسفند",
 ]
 
-
-# ==========================
-# Schemas
-# ==========================
 
 class AppointmentCreate(BaseModel):
     availability_id: int
@@ -84,10 +83,6 @@ class DoctorScheduleResponse(BaseModel):
     schedule: List[DailyScheduleOut]
 
 
-# ==========================
-# Helpers
-# ==========================
-
 def convert_to_jalali_details(gregorian_date: date):
     j_date = jdatetime.date.fromgregorian(date=gregorian_date)
     numeric = f"{j_date.year}/{j_date.month:02d}/{j_date.day:02d}"
@@ -98,34 +93,19 @@ def convert_to_jalali_details(gregorian_date: date):
 def get_user_by_id(db: Session, user_id: int | None) -> User | None:
     if not user_id:
         return None
-
-    return (
-        db.query(User)
-        .filter(User.id == user_id)
-        .first()
-    )
+    return db.query(User).filter(User.id == user_id).first()
 
 
 def get_doctor_by_id(db: Session, doctor_id: int | None) -> Doctor | None:
     if not doctor_id:
         return None
-
-    return (
-        db.query(Doctor)
-        .filter(Doctor.id == doctor_id)
-        .first()
-    )
+    return db.query(Doctor).filter(Doctor.id == doctor_id).first()
 
 
 def get_availability_by_id(db: Session, availability_id: int | None) -> Availability | None:
     if not availability_id:
         return None
-
-    return (
-        db.query(Availability)
-        .filter(Availability.id == availability_id)
-        .first()
-    )
+    return db.query(Availability).filter(Availability.id == availability_id).first()
 
 
 def get_user_display_name(user: User | None) -> str:
@@ -142,7 +122,6 @@ def get_user_display_name(user: User | None) -> str:
 
     first_name = getattr(user, "first_name", None)
     last_name = getattr(user, "last_name", None)
-
     combined_name = f"{first_name or ''} {last_name or ''}".strip()
     if combined_name:
         return combined_name
@@ -158,30 +137,19 @@ def get_doctor_specialty_name(doctor: Doctor | None) -> str | None:
     if not doctor:
         return None
 
-    try:
-        specialty_relation = getattr(doctor, "specialty_relation", None)
-        if specialty_relation:
-            specialty_name = getattr(specialty_relation, "name", None)
-            if specialty_name:
-                return str(specialty_name)
-    except Exception:
-        pass
+    for attr_name in ("specialty_relation", "specialty_obj"):
+        try:
+            specialty_obj = getattr(doctor, attr_name, None)
+            if specialty_obj:
+                specialty_name = getattr(specialty_obj, "name", None)
+                if specialty_name:
+                    return str(specialty_name)
+        except Exception:
+            pass
 
-    try:
-        specialty_obj = getattr(doctor, "specialty_obj", None)
-        if specialty_obj:
-            specialty_name = getattr(specialty_obj, "name", None)
-            if specialty_name:
-                return str(specialty_name)
-    except Exception:
-        pass
-
-    try:
-        specialty_id = getattr(doctor, "specialty_id", None)
-        if specialty_id:
-            return f"تخصص کد {specialty_id}"
-    except Exception:
-        pass
+    specialty_id = getattr(doctor, "specialty_id", None)
+    if specialty_id:
+        return f"تخصص کد {specialty_id}"
 
     return None
 
@@ -212,10 +180,8 @@ def serialize_appointment(db: Session, appointment: Appointment) -> dict:
 
         if availability_date:
             date_value = availability_date.isoformat()
-
         if availability_start_time:
             start_time_value = availability_start_time.strftime("%H:%M")
-
         if availability_end_time:
             end_time_value = availability_end_time.strftime("%H:%M")
 
@@ -243,7 +209,7 @@ def get_current_doctor_profile(db: Session, current_user: User):
     if current_user.role != "doctor":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="فقط پزشک دسترسی دارد."
+            detail="فقط پزشک دسترسی دارد.",
         )
 
     doctor = (
@@ -255,33 +221,28 @@ def get_current_doctor_profile(db: Session, current_user: User):
     if not doctor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="پروفایل پزشک پیدا نشد."
+            detail="پروفایل پزشک پیدا نشد.",
         )
 
     return doctor
 
 
 def get_locked_appointment(db: Session, appointment_id: int):
-    # برای جلوگیری از بروز باگ Deadlock در SQLite و PostgreSQL در درخواست‌های خواندن ساده،
-    # در محیط محلی از locking سنگین پرهیز می‌کنیم.
     appointment = (
         db.query(Appointment)
         .filter(Appointment.id == appointment_id)
+        .with_for_update()
         .first()
     )
 
     if not appointment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="نوبت پیدا نشد."
+            detail="نوبت پیدا نشد.",
         )
 
     return appointment
 
-
-# ==========================
-# Booking Core
-# ==========================
 
 def execute_booking(
     db: Session,
@@ -296,7 +257,6 @@ def execute_booking(
         )
 
     try:
-        # محافظت از رزرو همزمان با قفل کردن اسلات
         slot = (
             db.query(Availability)
             .filter(Availability.id == slot_id)
@@ -330,10 +290,7 @@ def execute_booking(
 
         duplicate = (
             db.query(Appointment)
-            .join(
-                Availability,
-                Appointment.availability_id == Availability.id,
-            )
+            .join(Availability, Appointment.availability_id == Availability.id)
             .filter(
                 Appointment.patient_id == current_user.id,
                 Appointment.doctor_id == slot.doctor_id,
@@ -349,6 +306,17 @@ def execute_booking(
                 detail="برای این پزشک در این روز نوبت فعال دارید.",
             )
 
+        fee = Decimal(str(doctor.consultation_fee))
+
+        transaction = WalletService.transfer_fee(
+            db=db,
+            patient_id=current_user.id,
+            doctor_id=doctor.user_id,
+            amount=fee,
+            appointment_id=None,
+            commit=False,
+        )
+
         tracking_code = f"DT{uuid4().hex[:16]}"
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -358,7 +326,7 @@ def execute_booking(
             availability_id=slot.id,
             status="confirmed",
             tracking_code=tracking_code,
-            disclaimer="رزرو آنلاین نوبت",
+            disclaimer="رزرو آنلاین نوبت و پرداخت کیف پول",
             held_at=now_utc,
             notes=notes.strip() if notes and notes.strip() else None,
         )
@@ -367,32 +335,36 @@ def execute_booking(
         slot.is_available = False
 
         db.add(appointment)
+        db.flush()
+
+        transaction.appointment_id = appointment.id
+        transaction.description = f"پرداخت حق ویزیت برای نوبت شماره {appointment.id}"
+
         db.commit()
         db.refresh(appointment)
 
+        logger.info(
+            "Atomic booking completed successfully: patient_id=%s, appointment_id=%s, fee=%s",
+            current_user.id,
+            appointment.id,
+            fee,
+        )
         return appointment
 
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        raise
-
-    except Exception as exc:
+        logger.warning("Booking rolled back due to validation: %s", he.detail)
+        raise he
+    except Exception:
         db.rollback()
-        traceback.print_exc()
+        logger.exception("Unexpected error during atomic booking. Transaction rolled back.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"خطای داخلی هنگام رزرو نوبت در دیتابیس: {str(exc)}",
+            detail="خطای داخلی سرور در فرآیند ثبت تراکنش نوبت",
         )
 
 
-# ==========================
-# Doctor Schedule
-# ==========================
-
-@router.get(
-    "/doctors/{doctor_id}/schedule",
-    response_model=DoctorScheduleResponse,
-)
+@router.get("/doctors/{doctor_id}/schedule", response_model=DoctorScheduleResponse)
 def get_doctor_schedule_grid(
     doctor_id: int,
     start_date: Optional[date] = None,
@@ -430,10 +402,8 @@ def get_doctor_schedule_grid(
         grouped.setdefault(slot.date, []).append(item)
 
     schedule = []
-
     for target_date in sorted(grouped.keys()):
         jalali_numeric, jalali_text = convert_to_jalali_details(target_date)
-
         schedule.append(
             DailyScheduleOut(
                 date=target_date.isoformat(),
@@ -451,14 +421,7 @@ def get_doctor_schedule_grid(
     }
 
 
-# ==========================
-# Create Appointment
-# ==========================
-
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("", status_code=status.HTTP_201_CREATED)
 def create_appointment(
     body: AppointmentCreate,
     db: Session = Depends(get_db),
@@ -477,10 +440,7 @@ def create_appointment(
     }
 
 
-@router.post(
-    "/book/{slot_id}",
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/book/{slot_id}", status_code=status.HTTP_201_CREATED)
 def book_appointment_quick(
     slot_id: int,
     db: Session = Depends(get_db),
@@ -498,10 +458,6 @@ def book_appointment_quick(
     }
 
 
-# ==========================
-# My Appointments
-# ==========================
-
 @router.get("/me")
 def get_my_appointments(
     current_user: User = Depends(get_current_user),
@@ -515,7 +471,6 @@ def get_my_appointments(
                 .order_by(Appointment.id.desc())
                 .all()
             )
-
         elif current_user.role == "doctor":
             doctor_profile = (
                 db.query(Doctor)
@@ -535,7 +490,6 @@ def get_my_appointments(
                 .order_by(Appointment.id.desc())
                 .all()
             )
-
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -555,19 +509,15 @@ def get_my_appointments(
 
     except HTTPException:
         raise
-
-    except Exception as exc:
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Failed to fetch user appointments")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"خطای سرور در دریافت لیست نوبت‌ها: {str(exc)}",
+            detail="خطای سرور در دریافت لیست نوبت‌ها",
         )
 
 
-# ==========================
-# Cancel Appointment
-# ==========================
-
+@router.post("/{appointment_id}/cancel")
 @router.put("/{appointment_id}/cancel")
 @router.patch("/{appointment_id}/cancel")
 def cancel_appointment(
@@ -583,16 +533,13 @@ def cancel_appointment(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="اجازه لغو این نوبت را ندارید.",
             )
-
     elif current_user.role == "doctor":
         doctor = get_current_doctor_profile(db, current_user)
-
         if appointment.doctor_id != doctor.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="اجازه لغو این نوبت را ندارید.",
             )
-
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -612,11 +559,11 @@ def cancel_appointment(
         )
 
     try:
-        # تغییر وضعیت اسلات به آزاد و در دسترس
         if appointment.availability_id:
             slot = (
                 db.query(Availability)
                 .filter(Availability.id == appointment.availability_id)
+                .with_for_update()
                 .first()
             )
 
@@ -625,30 +572,50 @@ def cancel_appointment(
                 slot.is_available = True
                 db.add(slot)
 
+        original_tx = (
+            db.query(Transaction)
+            .filter(
+                Transaction.appointment_id == appointment.id,
+                Transaction.transaction_type == TransactionType.TRANSFER,
+            )
+            .first()
+        )
+
+        refund_msg = ""
+        if original_tx:
+            WalletService.refund(
+                db=db,
+                transaction_id=original_tx.id,
+                description=f"برگشت وجه بابت لغو نوبت شماره {appointment.id}",
+                commit=False,
+            )
+            refund_msg = " و هزینه ویزیت به کیف پول بیمار برگشت داده شد"
+
         appointment.status = "cancelled"
         db.add(appointment)
 
         db.commit()
         db.refresh(appointment)
 
+        logger.info("Appointment cancelled atomically: appointment_id=%s", appointment.id)
         return {
             "success": True,
-            "message": "نوبت با موفقیت لغو شد و زمان آزاد گردید.",
+            "message": f"نوبت با موفقیت لغو شد، زمان مجدداً آزاد گردید{refund_msg}.",
             "status": appointment.status,
         }
 
-    except Exception as exc:
+    except HTTPException as he:
         db.rollback()
-        traceback.print_exc()
+        logger.warning("Cancellation failed due to: %s", he.detail)
+        raise he
+    except Exception:
+        db.rollback()
+        logger.exception("Cancellation error. Rolled back.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"خطا در فرآیند لغو نوبت در سرور: {str(exc)}",
+            detail="خطا در فرآیند لغو نوبت و بازگشت وجه در سرور",
         )
 
-
-# ==========================
-# Complete Appointment
-# ==========================
 
 @router.put("/{appointment_id}/complete")
 @router.patch("/{appointment_id}/complete")
@@ -680,27 +647,23 @@ def complete_appointment(
 
     try:
         appointment.status = "completed"
-
         db.commit()
         db.refresh(appointment)
 
+        logger.info("Appointment marked as completed: appointment_id=%s", appointment.id)
         return {
             "success": True,
             "status": appointment.status,
         }
 
-    except Exception as exc:
+    except Exception:
         db.rollback()
-        traceback.print_exc()
+        logger.exception("Failed to complete appointment: appointment_id=%s", appointment_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"خطا در تکمیل نوبت: {str(exc)}",
+            detail="خطا در تکمیل نوبت",
         )
 
-
-# ==========================
-# All Appointments
-# ==========================
 
 @router.get("")
 @router.get("/")
@@ -716,17 +679,14 @@ def get_all_appointments_filtered(
                 .order_by(Appointment.id.desc())
                 .all()
             )
-
         elif current_user.role == "doctor":
             doctor = get_current_doctor_profile(db, current_user)
-
             appointments = (
                 db.query(Appointment)
                 .filter(Appointment.doctor_id == doctor.id)
                 .order_by(Appointment.id.desc())
                 .all()
             )
-
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -746,10 +706,9 @@ def get_all_appointments_filtered(
 
     except HTTPException:
         raise
-
-    except Exception as exc:
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error listing all filtered appointments")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"خطای سرور در دریافت نوبت‌ها: {str(exc)}",
+            detail="خطای سرور در دریافت نوبت‌ها",
         )

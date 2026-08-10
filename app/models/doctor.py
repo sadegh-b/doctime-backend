@@ -1,5 +1,3 @@
-# Path: backend/app/models/doctor.py
-
 from sqlalchemy import Float, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,7 +14,9 @@ class Specialty(Base):
 
     name: Mapped[str] = mapped_column(
         String(120),
+        unique=True,
         nullable=False,
+        index=True,
     )
 
     slug: Mapped[str] = mapped_column(

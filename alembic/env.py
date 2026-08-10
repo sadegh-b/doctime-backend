@@ -14,18 +14,22 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.core.config import settings
 from app.database.base import Base
+
+# ایمپورت کردن دقیق مدل‌ها بر اساس ساختار واقعی فایل‌ها و کلاس‌های پروژه
 from app.models.user import User  # noqa: F401
-from app.models.doctor import Doctor  # noqa: F401
+from app.models.doctor import Doctor, Specialty  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
 from app.models.appointment import Appointment  # noqa: F401
+from app.models.wallet import Wallet, Transaction  # noqa: F401
 from app.models.consultation import ConsultationRequest  # noqa: F401
+from app.models.otp import OTPVerification  # noqa: F401 <-- نام کلاس اصلاح شد
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Use the same database URL as the application
+# استفاده از DATABASE_URL تعریف شده در تنظیمات اپلیکیشن
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 target_metadata = Base.metadata

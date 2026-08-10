@@ -1,5 +1,3 @@
-# app/models/user.py
-
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -33,7 +31,6 @@ class User(Base):
         nullable=False,
     )
 
-    # National ID is nullable to support users without national ID during some registration flows.
     national_id: Mapped[Optional[str]] = mapped_column(
         String(10),
         unique=True,
@@ -92,19 +89,16 @@ class User(Base):
         cascade="all, delete-orphan",
     )
 
+    # اضافه شدن رابطه کیف پول به مدل کاربر
+    wallet = relationship(
+        "Wallet",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     @property
     def phone_number(self) -> str:
-        """
-        Compatibility property for response schemas that expect `phone_number`.
-
-        Database/model field name:
-            user.phone
-
-        API/schema expected field name:
-            user.phone_number
-
-        This prevents FastAPI ResponseValidationError when serializing nested User objects.
-        """
         return self.phone
 
     def __repr__(self) -> str:

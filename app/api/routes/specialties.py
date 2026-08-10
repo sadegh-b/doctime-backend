@@ -1,7 +1,7 @@
 # Path: backend/app/api/routes/specialties.py
 
 import logging
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -61,10 +61,7 @@ DEFAULT_SPECIALTIES = [
 
 def seed_default_specialties(db: Session) -> None:
     """
-    Creates default specialties only when the specialties table is empty.
-
-    This helper is intentionally isolated so database transaction handling
-    remains explicit and testable.
+    Seed default specialties only when the specialties table is empty.
     """
     has_any_specialty = db.query(Specialty.id).first()
 
@@ -88,30 +85,28 @@ def seed_default_specialties(db: Session) -> None:
     logger.info("Default specialties seeded successfully.")
 
 
-@router.get("/", response_model=List[SpecialtyOut])
-def get_specialties(db: Session = Depends(get_db)) -> List[Specialty]:
+@router.get("/", response_model=list[SpecialtyOut], summary="Get all specialties")
+def get_specialties(db: Session = Depends(get_db)) -> list[Specialty]:
     """
-    Returns all specialties.
-
-    If no specialty exists yet, the default specialty list is seeded once.
+    Return all specialties ordered by name.
+    If the table is empty, default specialties are seeded once.
     """
     try:
         seed_default_specialties(db)
 
-        return (
+        specialties = (
             db.query(Specialty)
             .order_by(Specialty.name.asc())
             .all()
         )
 
+        return specialties
+
     except IntegrityError:
         db.rollback()
-
-        # احتمال درخواست هم‌زمان هنگام seed شدن داده‌ها:
-        # بعد از rollback دوباره داده‌های موجود را می‌خوانیم.
         logger.warning(
             "IntegrityError while seeding specialties. "
-            "Reading existing specialties again."
+            "Likely caused by concurrent requests; re-reading rows."
         )
 
         specialties = (
@@ -131,7 +126,6 @@ def get_specialties(db: Session = Depends(get_db)) -> List[Specialty]:
     except SQLAlchemyError:
         db.rollback()
         logger.exception("Database error while retrieving specialties.")
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="خطای دیتابیس هنگام دریافت تخصص‌ها رخ داد.",
@@ -140,7 +134,6 @@ def get_specialties(db: Session = Depends(get_db)) -> List[Specialty]:
     except Exception:
         db.rollback()
         logger.exception("Unexpected error while retrieving specialties.")
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="خطای غیرمنتظره‌ای رخ داد.",
