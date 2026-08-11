@@ -1,10 +1,16 @@
 from app.database.base import Base
-
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.availability import Availability
 from app.models.appointment import Appointment
-from app.models.wallet import Wallet, Transaction, TransactionType, TransactionStatus
+# Import new models
+from app.models.doctor_wallet import DoctorWallet, DoctorWalletTransaction
+from app.models.doctor_billing import (
+    SubscriptionPlan,
+    DoctorSubscription,
+    PromotionPackage,
+    DoctorPromotion
+)
 
 __all__ = [
     "Base",
@@ -12,8 +18,10 @@ __all__ = [
     "Doctor",
     "Availability",
     "Appointment",
-    "Wallet",
-    "Transaction",
-    "TransactionType",
-    "TransactionStatus",
+    "DoctorWallet",
+    "DoctorWalletTransaction",
+    "SubscriptionPlan",
+    "DoctorSubscription",
+    "PromotionPackage",
+    "DoctorPromotion",
 ]

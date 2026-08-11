@@ -10,7 +10,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
-from sqlalchemy.dialects import postgresql
 
 
 # Revision identifiers, used by Alembic.
@@ -21,7 +20,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 TABLE_NAME = "consultation_requests"
-ENUM_NAME = "consultationtype"
 
 INDEX_ID = "ix_consultation_requests_id"
 INDEX_PHONE_NUMBER = "ix_consultation_requests_phone_number"
@@ -34,35 +32,9 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
 
-    op.execute(
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_type
-                WHERE typname = 'consultationtype'
-            ) THEN
-                CREATE TYPE consultationtype AS ENUM (
-                    'ADDICTION',
-                    'CONSTIPATION'
-                );
-            END IF;
-        END
-        $$;
-        """
-    )
-
     existing_tables = set(inspector.get_table_names())
 
     if TABLE_NAME not in existing_tables:
-        consultation_type = postgresql.ENUM(
-            "ADDICTION",
-            "CONSTIPATION",
-            name=ENUM_NAME,
-            create_type=False,
-        )
-
         op.create_table(
             TABLE_NAME,
             sa.Column("id", sa.Integer(), nullable=False),
@@ -70,7 +42,7 @@ def upgrade() -> None:
             sa.Column("phone_number", sa.String(length=15), nullable=False),
             sa.Column(
                 "consultation_type",
-                consultation_type,
+                sa.String(length=20),
                 nullable=False,
             ),
             sa.Column("summary_data", sa.Text(), nullable=False),

@@ -89,7 +89,6 @@ class User(Base):
         cascade="all, delete-orphan",
     )
 
-    # اضافه شدن رابطه کیف پول به مدل کاربر
     wallet = relationship(
         "Wallet",
         back_populates="user",

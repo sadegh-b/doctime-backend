@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import enum
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -39,11 +40,16 @@ class Wallet(Base):
         index=True,
     )
 
-    # Numeric => Decimal
     balance: Mapped[Decimal] = mapped_column(
         Numeric(precision=12, scale=2),
         nullable=False,
         default=Decimal("0.00"),
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
     )
 
     is_locked: Mapped[bool] = mapped_column(
@@ -71,6 +77,20 @@ class Wallet(Base):
         uselist=False,
     )
 
+    sent_transactions = relationship(
+        "Transaction",
+        foreign_keys="Transaction.sender_wallet_id",
+        back_populates="sender_wallet",
+        cascade="all, delete-orphan",
+    )
+
+    received_transactions = relationship(
+        "Transaction",
+        foreign_keys="Transaction.receiver_wallet_id",
+        back_populates="receiver_wallet",
+        cascade="all, delete-orphan",
+    )
+
     def __repr__(self) -> str:
         return f"<Wallet id={self.id} user_id={self.user_id} balance={self.balance}>"
 
@@ -84,12 +104,12 @@ class Transaction(Base):
         index=True,
     )
 
-    sender_wallet_id: Mapped[int | None] = mapped_column(
+    sender_wallet_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("wallets.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    receiver_wallet_id: Mapped[int | None] = mapped_column(
+    receiver_wallet_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("wallets.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -111,7 +131,7 @@ class Transaction(Base):
         default=TransactionStatus.PENDING,
     )
 
-    appointment_id: Mapped[int | None] = mapped_column(
+    appointment_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("appointments.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -123,7 +143,7 @@ class Transaction(Base):
         index=True,
     )
 
-    description: Mapped[str | None] = mapped_column(
+    description: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
     )
@@ -137,11 +157,13 @@ class Transaction(Base):
     sender_wallet = relationship(
         "Wallet",
         foreign_keys=[sender_wallet_id],
+        back_populates="sent_transactions",
     )
 
     receiver_wallet = relationship(
         "Wallet",
         foreign_keys=[receiver_wallet_id],
+        back_populates="received_transactions",
     )
 
     appointment = relationship(

@@ -1,4 +1,4 @@
-# app/services/wallet_service.py
+# Path: app/services/wallet_service.py
 
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
@@ -22,49 +22,65 @@ logger = get_logger(__name__)
 class WalletService:
     MONEY_PRECISION = Decimal("0.01")
 
-    # ==========================
+    # =========================================================
     # Internal Helpers
-    # ==========================
+    # =========================================================
 
     @staticmethod
     def _to_decimal(value) -> Decimal:
         """
-        تبدیل ایمن مقدار به Decimal جهت جلوگیری از خطاهای float precision.
+        تبدیل امن مقدار پول به Decimal با دقت دو رقم اعشار.
         """
         try:
             decimal_value = Decimal(str(value))
         except Exception as exc:
-            logger.exception("Invalid money format in _to_decimal: value=%r", value)
+            logger.exception(
+                "Invalid money format in _to_decimal: value=%r",
+                value,
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="فرمت مبلغ نامعتبر است"
+                detail="فرمت مبلغ نامعتبر است",
             ) from exc
 
-        decimal_value = decimal_value.quantize(
+        return decimal_value.quantize(
             WalletService.MONEY_PRECISION,
-            rounding=ROUND_HALF_UP
+            rounding=ROUND_HALF_UP,
         )
 
-        return decimal_value
-
     @staticmethod
-    def _validate_positive_amount(amount: Decimal):
+    def _validate_positive_amount(amount: Decimal) -> None:
+        """
+        مبلغ باید حتماً بزرگ‌تر از صفر باشد.
+        """
         if amount <= Decimal("0.00"):
-            logger.warning("Invalid non-positive amount received: amount=%s", amount)
+            logger.warning(
+                "Invalid non-positive amount: amount=%s",
+                amount,
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="مبلغ باید بیشتر از صفر باشد"
+                detail="مبلغ باید بیشتر از صفر باشد",
             )
 
     @staticmethod
     def _lock_wallets(
-            db: Session,
-            wallet_ids: List[int]
+        db: Session,
+        wallet_ids: List[int],
     ) -> List[Wallet]:
         """
-        قفل کردن deterministic برای جلوگیری از deadlock در تراکنش‌های همزمان.
+        قفل‌کردن کیف پول‌ها برای جلوگیری از race condition.
+
+        کیف پول‌ها بر اساس id مرتب قفل می‌شوند تا احتمال deadlock
+        در عملیات انتقال کاهش پیدا کند.
         """
         sorted_ids = sorted(set(wallet_ids))
+
+        if not sorted_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="شناسه کیف پول معتبر نیست",
+            )
 
         try:
             wallets = (
@@ -75,494 +91,575 @@ class WalletService:
                 .all()
             )
         except Exception as exc:
-            logger.exception("Failed to lock wallets: wallet_ids=%s", sorted_ids)
+            logger.exception(
+                "Failed to lock wallets: wallet_ids=%s",
+                sorted_ids,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در قفل کردن کیف پول‌ها"
+                detail="خطا در قفل کردن کیف پول‌ها",
             ) from exc
 
         if len(wallets) != len(sorted_ids):
-            logger.warning(
-                "Wallet not found while locking. requested=%s found=%s",
-                sorted_ids,
-                [wallet.id for wallet in wallets],
-            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="کیف پول یافت نشد"
+                detail="کیف پول یافت نشد",
             )
 
         return wallets
 
-    # ==========================
+    @staticmethod
+    def _get_locked_transaction(
+        db: Session,
+        transaction_id: int,
+    ) -> Transaction:
+        """
+        دریافت تراکنش و قفل‌کردن آن برای جلوگیری از refund تکراری.
+        """
+        transaction = (
+            db.query(Transaction)
+            .filter(Transaction.id == transaction_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="تراکنش یافت نشد",
+            )
+
+        return transaction
+
+    # =========================================================
     # Wallet Core
-    # ==========================
+    # =========================================================
 
     @staticmethod
     def get_or_create_wallet(
-            db: Session,
-            user_id: int,
-            commit: bool = True
+        db: Session,
+        user_id: int,
+        commit: bool = True,
     ) -> Wallet:
         """
-        دریافت یا ساخت کیف پول کاربر با کنترل کامیت تراکنش.
+        دریافت کیف پول کاربر یا ساخت کیف پول جدید.
         """
-        try:
-            wallet = (
-                db.query(Wallet)
-                .filter(Wallet.user_id == user_id)
-                .first()
-            )
-        except Exception as exc:
-            logger.exception("Database error in get_or_create_wallet (fetch wallet): user_id=%s", user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در دریافت کیف پول"
-            ) from exc
+        wallet = (
+            db.query(Wallet)
+            .filter(Wallet.user_id == user_id)
+            .first()
+        )
 
         if wallet:
             return wallet
 
-        try:
-            user = (
-                db.query(User)
-                .filter(User.id == user_id)
-                .first()
-            )
-        except Exception as exc:
-            logger.exception("Database error in get_or_create_wallet (fetch user): user_id=%s", user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در بررسی کاربر"
-            ) from exc
+        user = (
+            db.query(User)
+            .filter(User.id == user_id)
+            .first()
+        )
 
         if not user:
-            logger.warning("User not found for wallet creation: user_id=%s", user_id)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="کاربر یافت نشد"
+                detail="کاربر یافت نشد",
             )
 
         wallet = Wallet(
             user_id=user_id,
-            balance=Decimal("0.00")
+            balance=Decimal("0.00"),
+            is_active=True,
+            is_locked=False,
         )
 
         db.add(wallet)
 
-        if commit:
-            try:
+        try:
+            if commit:
                 db.commit()
                 db.refresh(wallet)
-                logger.info("Wallet created successfully: user_id=%s wallet_id=%s", user_id, wallet.id)
-                return wallet
-            except Exception as exc:
-                db.rollback()
-                logger.exception("Failed to create wallet with commit: user_id=%s", user_id)
-
-                # تلاش مجدد برای هندل Race Condition
-                existing_wallet = db.query(Wallet).filter(Wallet.user_id == user_id).first()
-                if existing_wallet:
-                    return existing_wallet
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="خطا در ساخت کیف پول"
-                ) from exc
-        else:
-            try:
+            else:
                 db.flush()
-                logger.info("Wallet created in-memory (Flushed): user_id=%s", user_id)
-                return wallet
-            except Exception as exc:
-                logger.exception("Failed to create wallet with flush: user_id=%s", user_id)
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to create wallet for user_id=%s",
+                user_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در ایجاد کیف پول",
+            ) from exc
 
-                # تلاش مجدد بدون تراکنش جدید
-                existing_wallet = db.query(Wallet).filter(Wallet.user_id == user_id).first()
-                if existing_wallet:
-                    return existing_wallet
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="خطا در ساخت کیف پول"
-                ) from exc
+        return wallet
 
-    # ==========================
-    # Deposit
-    # ==========================
+    # =========================================================
+    # Immediate Deposit
+    # =========================================================
 
     @staticmethod
     def deposit(
-            db: Session,
-            user_id: int,
-            amount: Decimal,
-            description: str = "شارژ کیف پول",
-            commit: bool = True
+        db: Session,
+        user_id: int,
+        amount: Decimal,
+        description: str = "شارژ کیف پول",
+        commit: bool = True,
     ) -> Transaction:
+        """
+        شارژ مستقیم کیف پول.
+
+        این متد برای شارژهایی استفاده می‌شود که قبلاً خارج از درگاه
+        پرداخت تأیید شده‌اند؛ مانند تست‌ها، ادمین یا عملیات داخلی.
+
+        تفاوت این متد با create_pending_deposit:
+        - deposit موجودی را بلافاصله افزایش می‌دهد.
+        - create_pending_deposit فقط تراکنش pending ایجاد می‌کند.
+        """
         amount_dec = WalletService._to_decimal(amount)
         WalletService._validate_positive_amount(amount_dec)
 
-        logger.info(
-            "Deposit requested: user_id=%s amount=%s description=%s commit=%s",
-            user_id,
-            amount_dec,
-            description,
-            commit
+        wallet = WalletService.get_or_create_wallet(
+            db=db,
+            user_id=user_id,
+            commit=False,
         )
 
-        wallet = WalletService.get_or_create_wallet(db=db, user_id=user_id, commit=commit)
-
-        try:
-            locked_wallet = (
-                db.query(Wallet)
-                .filter(Wallet.id == wallet.id)
-                .with_for_update()
-                .first()
-            )
-        except Exception as exc:
-            logger.exception("Failed to lock wallet for deposit: wallet_id=%s", wallet.id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در قفل کردن کیف پول"
-            ) from exc
-
-        if not locked_wallet:
-            logger.warning("Wallet not found during deposit lock: wallet_id=%s", wallet.id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="کیف پول یافت نشد"
-            )
-
-        tracking_code = f"DEP-{uuid.uuid4().hex[:10].upper()}"
+        locked_wallets = WalletService._lock_wallets(
+            db=db,
+            wallet_ids=[wallet.id],
+        )
+        wallet = locked_wallets[0]
 
         transaction = Transaction(
-            receiver_wallet_id=locked_wallet.id,
+            receiver_wallet_id=wallet.id,
             amount=amount_dec,
             transaction_type=TransactionType.DEPOSIT,
             status=TransactionStatus.SUCCESS,
-            tracking_code=tracking_code,
+            tracking_code=f"DEP-{uuid.uuid4().hex[:12].upper()}",
             description=description,
         )
 
-        locked_wallet.balance = (
-                WalletService._to_decimal(locked_wallet.balance) + amount_dec
+        wallet.balance = (
+            WalletService._to_decimal(wallet.balance) + amount_dec
         )
 
         db.add(transaction)
 
-        if commit:
-            try:
+        try:
+            if commit:
                 db.commit()
+                db.refresh(wallet)
                 db.refresh(transaction)
-                logger.info(
-                    "Deposit successful (Committed): user_id=%s wallet_id=%s amount=%s tracking_code=%s",
-                    user_id,
-                    locked_wallet.id,
-                    amount_dec,
-                    tracking_code
-                )
-            except Exception as exc:
-                db.rollback()
-                logger.exception(
-                    "Deposit commit failed: user_id=%s wallet_id=%s amount=%s",
-                    user_id,
-                    locked_wallet.id,
-                    amount_dec
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="خطا در شارژ کیف پول"
-                ) from exc
-        else:
-            db.flush()
-            logger.info("Deposit processed (Flushed): user_id=%s wallet_id=%s", user_id, locked_wallet.id)
+            else:
+                db.flush()
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to deposit into wallet: user_id=%s amount=%s",
+                user_id,
+                amount_dec,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در شارژ کیف پول",
+            ) from exc
+
+        logger.info(
+            "Wallet deposit completed: user_id=%s amount=%s transaction_id=%s",
+            user_id,
+            amount_dec,
+            transaction.id,
+        )
 
         return transaction
 
-    # ==========================
-    # Transfer Fee
-    # ==========================
+    # =========================================================
+    # Pending Deposit Flow
+    # =========================================================
 
     @staticmethod
-    def transfer_fee(
-            db: Session,
-            patient_id: int,
-            doctor_id: int,
-            amount: Decimal,
-            appointment_id: Optional[int] = None,
-            commit: bool = True
+    def create_pending_deposit(
+        db: Session,
+        user_id: int,
+        amount: Decimal,
+        description: str = "شارژ کیف پول (در انتظار پرداخت)",
     ) -> Transaction:
         """
-        انتقال وجه از بیمار به پزشک با اتمیسیته کامل.
+        ایجاد تراکنش pending بدون افزایش موجودی.
         """
         amount_dec = WalletService._to_decimal(amount)
         WalletService._validate_positive_amount(amount_dec)
 
-        logger.info(
-            "Transfer fee requested: patient_id=%s doctor_id=%s amount=%s appointment_id=%s commit=%s",
-            patient_id,
-            doctor_id,
-            amount_dec,
-            appointment_id,
-            commit
-        )
-
-        # ساخت یا دریافت کیف پول‌ها بدون ثبت تراکنش مستقل (اجتناب از کامیت ناخواسته)
-        patient_wallet = WalletService.get_or_create_wallet(db=db, user_id=patient_id, commit=commit)
-
-        try:
-            doctor_user = (
-                db.query(User)
-                .filter(User.id == doctor_id)
-                .first()
-            )
-        except Exception as exc:
-            logger.exception("Failed to fetch doctor user: doctor_id=%s", doctor_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در بررسی پزشک"
-            ) from exc
-
-        if not doctor_user:
-            logger.warning("Doctor user not found: doctor_id=%s", doctor_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="پزشک یافت نشد"
-            )
-
-        doctor_wallet = WalletService.get_or_create_wallet(db=db, user_id=doctor_id, commit=commit)
-
-        # قفل‌گذاری منظم صعودی برای پیشگیری از Deadlock
-        wallets = WalletService._lock_wallets(
+        wallet = WalletService.get_or_create_wallet(
             db=db,
-            wallet_ids=[patient_wallet.id, doctor_wallet.id]
+            user_id=user_id,
+            commit=False,
         )
 
-        wallet_map = {wallet.id: wallet for wallet in wallets}
-        locked_patient_wallet = wallet_map[patient_wallet.id]
-        locked_doctor_wallet = wallet_map[doctor_wallet.id]
-
-        current_balance = WalletService._to_decimal(locked_patient_wallet.balance)
-
-        if current_balance < amount_dec:
-            logger.warning(
-                "Insufficient funds: patient_id=%s wallet_id=%s balance=%s amount=%s",
-                patient_id,
-                locked_patient_wallet.id,
-                current_balance,
-                amount_dec
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="موجودی کیف پول بیمار کافی نیست"
-            )
-
-        tracking_code = f"TRX-{uuid.uuid4().hex[:10].upper()}"
+        authority = f"DEP-{uuid.uuid4().hex[:12].upper()}"
 
         transaction = Transaction(
-            sender_wallet_id=locked_patient_wallet.id,
-            receiver_wallet_id=locked_doctor_wallet.id,
+            receiver_wallet_id=wallet.id,
+            amount=amount_dec,
+            transaction_type=TransactionType.DEPOSIT,
+            status=TransactionStatus.PENDING,
+            tracking_code=authority,
+            description=description,
+        )
+
+        db.add(transaction)
+
+        try:
+            db.commit()
+            db.refresh(transaction)
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to create pending deposit for user_id=%s",
+                user_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در ایجاد تراکنش شارژ",
+            ) from exc
+
+        logger.info(
+            "Pending deposit created: user_id=%s authority=%s",
+            user_id,
+            authority,
+        )
+
+        return transaction
+
+    @staticmethod
+    def verify_deposit(
+        db: Session,
+        authority: str,
+        is_bank_successful: bool,
+    ) -> Transaction:
+        """
+        تأیید نهایی تراکنش pending به‌شکل idempotent.
+        """
+        transaction = (
+            db.query(Transaction)
+            .filter(Transaction.tracking_code == authority)
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="تراکنش یافت نشد",
+            )
+
+        if transaction.status in (
+            TransactionStatus.SUCCESS,
+            TransactionStatus.FAILED,
+        ):
+            return transaction
+
+        if transaction.status != TransactionStatus.PENDING:
+            return transaction
+
+        if is_bank_successful:
+            wallet = (
+                db.query(Wallet)
+                .filter(Wallet.id == transaction.receiver_wallet_id)
+                .with_for_update()
+                .first()
+            )
+
+            if not wallet:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="کیف پول مقصد یافت نشد",
+                )
+
+            wallet.balance = (
+                WalletService._to_decimal(wallet.balance)
+                + transaction.amount
+            )
+            transaction.status = TransactionStatus.SUCCESS
+
+        else:
+            transaction.status = TransactionStatus.FAILED
+
+        try:
+            db.commit()
+            db.refresh(transaction)
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to verify deposit: authority=%s",
+                authority,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در ثبت نهایی تراکنش",
+            ) from exc
+
+        return transaction
+
+    # =========================================================
+    # Transfer
+    # =========================================================
+
+    @staticmethod
+    def transfer_fee(
+        db: Session,
+        patient_id: int,
+        doctor_id: int,
+        amount: Decimal,
+        appointment_id: Optional[int] = None,
+        commit: bool = True,
+    ) -> Transaction:
+        """
+        انتقال هزینه ویزیت از بیمار به پزشک.
+        """
+        amount_dec = WalletService._to_decimal(amount)
+        WalletService._validate_positive_amount(amount_dec)
+
+        patient_wallet = WalletService.get_or_create_wallet(
+            db=db,
+            user_id=patient_id,
+            commit=False,
+        )
+
+        doctor_wallet = WalletService.get_or_create_wallet(
+            db=db,
+            user_id=doctor_id,
+            commit=False,
+        )
+
+        wallets = WalletService._lock_wallets(
+            db=db,
+            wallet_ids=[
+                patient_wallet.id,
+                doctor_wallet.id,
+            ],
+        )
+
+        patient_wallet = next(
+            wallet for wallet in wallets
+            if wallet.id == patient_wallet.id
+        )
+        doctor_wallet = next(
+            wallet for wallet in wallets
+            if wallet.id == doctor_wallet.id
+        )
+
+        if patient_wallet.balance < amount_dec:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="موجودی کیف پول بیمار کافی نیست",
+            )
+
+        transaction = Transaction(
+            sender_wallet_id=patient_wallet.id,
+            receiver_wallet_id=doctor_wallet.id,
             amount=amount_dec,
             transaction_type=TransactionType.TRANSFER,
             status=TransactionStatus.SUCCESS,
             appointment_id=appointment_id,
-            tracking_code=tracking_code,
-            description=f"پرداخت حق ویزیت برای نوبت موقت" if appointment_id is None else f"پرداخت حق ویزیت برای نوبت شماره {appointment_id}"
+            tracking_code=f"TRX-{uuid.uuid4().hex[:10].upper()}",
+            description=(
+                f"پرداخت ویزیت نوبت {appointment_id}"
+                if appointment_id
+                else "پرداخت حق ویزیت"
+            ),
         )
 
-        locked_patient_wallet.balance = current_balance - amount_dec
-        locked_doctor_wallet.balance = (
-                WalletService._to_decimal(locked_doctor_wallet.balance) + amount_dec
-        )
+        patient_wallet.balance -= amount_dec
+        doctor_wallet.balance += amount_dec
 
         db.add(transaction)
 
-        if commit:
-            try:
+        try:
+            if commit:
                 db.commit()
                 db.refresh(transaction)
-                logger.info(
-                    "Transfer fee successful (Committed): patient_id=%s doctor_id=%s amount=%s",
-                    patient_id,
-                    doctor_id,
-                    amount_dec
-                )
-            except Exception as exc:
-                db.rollback()
-                logger.exception("Transfer fee commit failed: patient_id=%s doctor_id=%s", patient_id, doctor_id)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="خطا در انتقال وجه"
-                ) from exc
-        else:
-            db.flush()
-            logger.info("Transfer fee processed (Flushed): patient_id=%s doctor_id=%s", patient_id, doctor_id)
+            else:
+                db.flush()
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to transfer fee: patient_id=%s doctor_id=%s amount=%s",
+                patient_id,
+                doctor_id,
+                amount_dec,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در انتقال وجه",
+            ) from exc
 
         return transaction
 
-    # ==========================
-    # Wallet History
-    # ==========================
-
-    @staticmethod
-    def get_wallet_history(
-            db: Session,
-            user_id: int
-    ) -> List[Transaction]:
-        try:
-            # فقط کیف پول را کوئری می‌زنیم تا بیهوده در متد نمایشی کیف‌پول نسازیم
-            wallet = db.query(Wallet).filter(Wallet.user_id == user_id).first()
-            if not wallet:
-                return []
-
-            transactions = (
-                db.query(Transaction)
-                .filter(
-                    (Transaction.sender_wallet_id == wallet.id)
-                    |
-                    (Transaction.receiver_wallet_id == wallet.id)
-                )
-                .order_by(Transaction.created_at.desc())
-                .all()
-            )
-
-            return transactions
-
-        except Exception as exc:
-            logger.exception("Failed to fetch wallet history: user_id=%s", user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در دریافت تاریخچه کیف پول"
-            ) from exc
-
-    # ==========================
+    # =========================================================
     # Refund
-    # ==========================
+    # =========================================================
 
     @staticmethod
     def refund(
-            db: Session,
-            transaction_id: int,
-            description: str = "برگشت وجه به بیمار",
-            commit: bool = True
+        db: Session,
+        transaction_id: int,
+        description: str = "بازگشت وجه",
+        commit: bool = True,
     ) -> Transaction:
         """
-        بازگردانی وجه تراکنش به صورت امن و غیرقابل بازگشت مجدد.
+        برگشت وجه یک تراکنش انتقال از پزشک به بیمار.
+
+        برای تراکنش اصلی:
+        sender_wallet   = کیف پول بیمار
+        receiver_wallet = کیف پول پزشک
+
+        در refund:
+        sender_wallet   = کیف پول پزشک
+        receiver_wallet = کیف پول بیمار
         """
-        logger.info("Refund requested: transaction_id=%s commit=%s", transaction_id, commit)
+        original_transaction = WalletService._get_locked_transaction(
+            db=db,
+            transaction_id=transaction_id,
+        )
 
-        try:
-            # قفل کردن تراکنش اصلی جهت جلوگیری از ایجاد موازیِ refund روی یک فاکتور
-            original_tx = (
-                db.query(Transaction)
-                .filter(Transaction.id == transaction_id)
-                .with_for_update()
-                .first()
-            )
-        except Exception as exc:
-            logger.exception("Failed to fetch/lock original transaction: transaction_id=%s", transaction_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="خطا در بررسی تراکنش اصلی"
-            ) from exc
-
-        if not original_tx:
-            logger.warning("Original transaction not found for refund: transaction_id=%s", transaction_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="تراکنش یافت نشد"
-            )
-
-        if original_tx.transaction_type != TransactionType.TRANSFER:
-            logger.warning(
-                "Invalid transaction type for refund: transaction_id=%s type=%s",
-                transaction_id,
-                original_tx.transaction_type
-            )
+        if original_transaction.transaction_type != TransactionType.TRANSFER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="فقط تراکنش انتقال قابل بازگشت است"
+                detail="فقط تراکنش انتقال قابل برگشت است",
             )
 
-        # بررسی وجود ریفاند قبلی به صورت ایمن
+        if original_transaction.status != TransactionStatus.SUCCESS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="فقط تراکنش موفق قابل برگشت است",
+            )
+
+        if not original_transaction.sender_wallet_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="کیف پول بیمار در تراکنش یافت نشد",
+            )
+
+        if not original_transaction.receiver_wallet_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="کیف پول پزشک در تراکنش یافت نشد",
+            )
+
         existing_refund = (
             db.query(Transaction)
             .filter(
                 Transaction.transaction_type == TransactionType.REFUND,
-                Transaction.appointment_id == original_tx.appointment_id,
+                Transaction.appointment_id == original_transaction.appointment_id,
             )
             .first()
         )
 
-        if existing_refund:
-            logger.warning(
-                "Duplicate refund attempt blocked: original_transaction_id=%s appointment_id=%s",
-                transaction_id,
-                original_tx.appointment_id
-            )
+        if (
+            original_transaction.appointment_id is not None
+            and existing_refund is not None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="این تراکنش قبلاً بازگشت وجه شده است"
+                detail="این تراکنش قبلاً برگشت داده شده است",
             )
 
-        # قفل‌گذاری ترتیبی صعودی
         wallets = WalletService._lock_wallets(
             db=db,
             wallet_ids=[
-                original_tx.sender_wallet_id,
-                original_tx.receiver_wallet_id,
-            ]
+                original_transaction.sender_wallet_id,
+                original_transaction.receiver_wallet_id,
+            ],
         )
 
-        wallet_map = {wallet.id: wallet for wallet in wallets}
-        patient_wallet = wallet_map[original_tx.sender_wallet_id]
-        doctor_wallet = wallet_map[original_tx.receiver_wallet_id]
+        patient_wallet = next(
+            wallet
+            for wallet in wallets
+            if wallet.id == original_transaction.sender_wallet_id
+        )
 
-        amount_to_refund = WalletService._to_decimal(original_tx.amount)
-        doctor_balance = WalletService._to_decimal(doctor_wallet.balance)
+        doctor_wallet = next(
+            wallet
+            for wallet in wallets
+            if wallet.id == original_transaction.receiver_wallet_id
+        )
 
-        if doctor_balance < amount_to_refund:
-            logger.warning(
-                "Insufficient doctor balance for refund: transaction_id=%s balance=%s refund_amount=%s",
-                transaction_id,
-                doctor_balance,
-                amount_to_refund
-            )
+        amount_dec = WalletService._to_decimal(
+            original_transaction.amount
+        )
+
+        if doctor_wallet.balance < amount_dec:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="موجودی پزشک برای برگشت وجه کافی نیست"
+                detail="موجودی کیف پول پزشک برای بازگشت وجه کافی نیست",
             )
 
-        refund_tx = Transaction(
+        refund_transaction = Transaction(
             sender_wallet_id=doctor_wallet.id,
             receiver_wallet_id=patient_wallet.id,
-            amount=amount_to_refund,
+            amount=amount_dec,
             transaction_type=TransactionType.REFUND,
             status=TransactionStatus.SUCCESS,
-            appointment_id=original_tx.appointment_id,
+            appointment_id=original_transaction.appointment_id,
             tracking_code=f"REF-{uuid.uuid4().hex[:10].upper()}",
             description=description,
         )
 
-        doctor_wallet.balance = doctor_balance - amount_to_refund
-        patient_wallet.balance = (
-                WalletService._to_decimal(patient_wallet.balance) + amount_to_refund
+        doctor_wallet.balance -= amount_dec
+        patient_wallet.balance += amount_dec
+
+        db.add(refund_transaction)
+
+        try:
+            if commit:
+                db.commit()
+                db.refresh(refund_transaction)
+            else:
+                db.flush()
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "Failed to refund transaction_id=%s",
+                transaction_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در بازگشت وجه",
+            ) from exc
+
+        logger.info(
+            "Refund completed: original_transaction_id=%s refund_transaction_id=%s",
+            transaction_id,
+            refund_transaction.id,
         )
 
-        db.add(refund_tx)
+        return refund_transaction
 
-        if commit:
-            try:
-                db.commit()
-                db.refresh(refund_tx)
-                logger.info("Refund successful (Committed): refund_id=%s", refund_tx.id)
-            except Exception as exc:
-                db.rollback()
-                logger.exception("Refund commit failed: transaction_id=%s", transaction_id)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="خطا در برگشت وجه"
-                ) from exc
-        else:
-            db.flush()
-            logger.info("Refund processed (Flushed): transaction_id=%s", transaction_id)
+    # =========================================================
+    # History
+    # =========================================================
 
-        return refund_tx
+    @staticmethod
+    def get_wallet_history(
+        db: Session,
+        user_id: int,
+    ) -> List[Transaction]:
+        wallet = (
+            db.query(Wallet)
+            .filter(Wallet.user_id == user_id)
+            .first()
+        )
+
+        if not wallet:
+            return []
+
+        return (
+            db.query(Transaction)
+            .filter(
+                (Transaction.sender_wallet_id == wallet.id)
+                | (Transaction.receiver_wallet_id == wallet.id)
+            )
+            .order_by(Transaction.created_at.desc())
+            .all()
+        )

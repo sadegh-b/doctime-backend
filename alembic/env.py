@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -12,32 +12,32 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.config import settings
 from app.database.base import Base
-
-# ایمپورت کردن دقیق مدل‌ها بر اساس ساختار واقعی فایل‌ها و کلاس‌های پروژه
-from app.models.user import User  # noqa: F401
-from app.models.doctor import Doctor, Specialty  # noqa: F401
-from app.models.availability import Availability  # noqa: F401
 from app.models.appointment import Appointment  # noqa: F401
-from app.models.wallet import Wallet, Transaction  # noqa: F401
+from app.models.availability import Availability  # noqa: F401
 from app.models.consultation import ConsultationRequest  # noqa: F401
-from app.models.otp import OTPVerification  # noqa: F401 <-- نام کلاس اصلاح شد
+from app.models.doctor import Doctor, Specialty  # noqa: F401
+from app.models.otp import OTPVerification  # noqa: F401
+from app.models.user import User  # noqa: F401
+from app.models.wallet import Transaction, Wallet  # noqa: F401
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# استفاده از DATABASE_URL تعریف شده در تنظیمات اپلیکیشن
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
-
+# IMPORTANT:
+# Do not override sqlalchemy.url with settings.DATABASE_URL here.
+# Alembic must use the URL from the selected configuration file:
+#   alembic.ini
+#   alembic_fresh.ini
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """Run migrations in offline mode."""
     url = config.get_main_option("sqlalchemy.url")
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
