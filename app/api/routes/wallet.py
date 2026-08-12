@@ -139,4 +139,5 @@ def get_my_transactions(
         db: Session = Depends(get_db)
 ):
     """دریافت تاریخچه تراکنش‌ها"""
-    return WalletService.get_transactions(db=db, user_id=current_user.id)
+    return WalletService.get_wallet_history(db=db, user_id=current_user.id)
+

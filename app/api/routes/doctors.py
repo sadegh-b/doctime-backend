@@ -4,7 +4,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, and_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import get_current_user, get_db
@@ -67,12 +67,11 @@ class DoctorResponse(BaseModel):
 
     specialty: Optional[SpecialtyResponse] = Field(
         default=None,
-        alias="specialty_relation",
+        validation_alias="specialty_relation",
     )
 
     model_config = {
         "from_attributes": True,
-        "populate_by_name": True,
     }
 
 
@@ -130,31 +129,29 @@ def normalize_persian_text(value: str) -> str:
 def normalize_persian_sql_column(column: Any) -> Any:
     """
     نرمال‌سازی حروف عربی داخل ستون دیتابیس در سطح SQL.
+    سازگار با SQLite و PostgreSQL.
 
-    این تابع برای PostgreSQL و بیشتر دیتابیس‌هایی که
-    تابع replace را پشتیبانی می‌کنند قابل استفاده است.
+    مهم: جایگزینی‌ها باید تو-در-تو (nested) باشند، چون نمی‌توان
+    یک expression SQL را در Python با خروجی تابع بعدی overwrite کرد.
+
+    coalesce باعث می‌شود اگر مقدار ستون NULL بود، خطا ندهد و
+    به رشته خالی تبدیل شود.
     """
-    normalized_column = func.coalesce(column, "")
+    col = func.coalesce(column, "")
 
-    normalized_column = func.replace(
-        normalized_column,
-        "ي",
-        "ی",
-    )
-
-    normalized_column = func.replace(
-        normalized_column,
-        "ى",
-        "ی",
-    )
-
-    normalized_column = func.replace(
-        normalized_column,
+    return func.replace(
+        func.replace(
+            func.replace(
+                col,
+                "ي",
+                "ی",
+            ),
+            "ى",
+            "ی",
+        ),
         "ك",
         "ک",
     )
-
-    return normalized_column
 
 
 def validate_optional_text(
@@ -287,12 +284,9 @@ def get_doctors_list(
             Specialty.slug
         )
 
+        # SQLite از عملگر + به عنوان || (concat) استفاده می‌کند
         normalized_full_name = func.trim(
-            func.concat(
-                normalized_first_name,
-                " ",
-                normalized_last_name,
-            )
+            normalized_first_name + " " + normalized_last_name
         )
 
         # جستجوی کل عبارت کامل
