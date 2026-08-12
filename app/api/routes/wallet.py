@@ -99,9 +99,10 @@ def initiate_deposit(
             authority=transaction.tracking_code
         )
 
+
     except Exception as e:
         # ثبت دقیق خطا برای مربی!
-        print(f"CRITICAL ERROR in initiate_deposit: {str(e)}")        raise HTTPException(
+        print(f"CRITICAL ERROR in initiate_deposit: {str(e)}")`n        raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="سیستم بانکی موقتاً در دسترس نیست."
         )
