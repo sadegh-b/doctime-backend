@@ -77,6 +77,8 @@ if frontend_url and frontend_url not in allowed_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    # allows any Vercel preview/deployment of doctime-frontend
+    allow_origin_regex=r"^https://doctime-frontend.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
