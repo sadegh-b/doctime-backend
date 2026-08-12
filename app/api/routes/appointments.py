@@ -265,7 +265,7 @@ def execute_booking(
         if not slot:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="زمان پیدا نشد.",
+                detail="زمان انتخاب‌شده پیدا نشد.",
             )
 
         if slot.is_booked or not slot.is_available:
@@ -283,7 +283,13 @@ def execute_booking(
         if not doctor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="پزشک پیدا نشد.",
+                detail="پزشک مربوط به این زمان پیدا نشد.",
+            )
+
+        if doctor.user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="پروفایل کاربری پزشک کامل نیست.",
             )
 
         duplicate = (
@@ -301,15 +307,12 @@ def execute_booking(
         if duplicate:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="برای این پزشک در این روز نوبت فعال دارید.",
+                detail="برای این پزشک در این روز یک نوبت فعال دارید.",
             )
 
-        if doctor.user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="پروفایل کاربری پزشک کامل نیست.",
-            )
-
+        # -----------------------------
+        # اعتبارسنجی قطعی هزینه ویزیت
+        # -----------------------------
         fee_raw = getattr(doctor, "consultation_fee", None)
         if fee_raw is None:
             raise HTTPException(
@@ -318,10 +321,10 @@ def execute_booking(
             )
 
         try:
-            fee = Decimal(str(fee_raw))
-        except Exception as exc:
+            fee = Decimal(str(fee_raw).strip())
+        except (InvalidOperation, ValueError, TypeError) as exc:
             logger.exception(
-                "Invalid consultation_fee for doctor_id=%s fee_raw=%r",
+                "Invalid consultation fee: doctor_id=%s, fee_raw=%r",
                 doctor.id,
                 fee_raw,
             )
@@ -330,17 +333,64 @@ def execute_booking(
                 detail="هزینه ویزیت پزشک نامعتبر است.",
             ) from exc
 
-        transaction = WalletService.transfer_fee(
-            db=db,
-            patient_id=current_user.id,
-            doctor_id=doctor.user_id,
-            amount=fee,
-            appointment_id=None,
-            commit=False,
-        )
+        if not fee.is_finite() or fee <= Decimal("0"):
+            logger.warning(
+                "Invalid non-positive consultation fee: doctor_id=%s, fee=%s",
+                doctor.id,
+                fee,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="هزینه ویزیت پزشک باید بیشتر از صفر باشد.",
+            )
 
-        tracking_code = f"DT{uuid4().hex[:16]}"
+        # -----------------------------
+        # پرداخت اتمیک از کیف پول بیمار
+        # -----------------------------
+        try:
+            transaction = WalletService.transfer_fee(
+                db=db,
+                patient_id=current_user.id,
+                doctor_id=doctor.user_id,
+                amount=fee,
+                appointment_id=None,
+                commit=False,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "WALLET TRANSFER FAILED: patient_id=%s, doctor_id=%s, "
+                "doctor_user_id=%s, slot_id=%s, fee=%s",
+                current_user.id,
+                doctor.id,
+                doctor.user_id,
+                slot.id,
+                fee,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="خطا در پرداخت کیف پول هنگام ثبت نوبت.",
+            ) from exc
+
+        if transaction is None:
+            logger.error(
+                "WalletService.transfer_fee returned None: patient_id=%s, doctor_user_id=%s",
+                current_user.id,
+                doctor.user_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="تراکنش پرداخت کیف پول ایجاد نشد.",
+            )
+
+        # -----------------------------
+        # ایجاد نوبت و قفل‌کردن زمان
+        # -----------------------------
+        tracking_code = f"DT{uuid4().hex[:16].upper()}"
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        normalized_notes = notes.strip() if notes and notes.strip() else None
 
         appointment = Appointment(
             patient_id=current_user.id,
@@ -350,7 +400,7 @@ def execute_booking(
             tracking_code=tracking_code,
             disclaimer="رزرو آنلاین نوبت و پرداخت کیف پول",
             held_at=now_utc,
-            notes=notes.strip() if notes and notes.strip() else None,
+            notes=normalized_notes,
         )
 
         slot.is_booked = True
@@ -366,24 +416,38 @@ def execute_booking(
         db.refresh(appointment)
 
         logger.info(
-            "Atomic booking completed successfully: patient_id=%s, appointment_id=%s, fee=%s",
-            current_user.id,
+            "Atomic booking completed: appointment_id=%s, patient_id=%s, "
+            "doctor_id=%s, doctor_user_id=%s, slot_id=%s, fee=%s",
             appointment.id,
+            current_user.id,
+            doctor.id,
+            doctor.user_id,
+            slot.id,
             fee,
         )
         return appointment
 
-    except HTTPException as he:
+    except HTTPException as exc:
         db.rollback()
-        logger.warning("Booking rolled back due to validation: %s", he.detail)
-        raise he
-    except Exception:
+        logger.warning(
+            "Booking rolled back: slot_id=%s, patient_id=%s, status_code=%s, detail=%s",
+            slot_id,
+            current_user.id,
+            exc.status_code,
+            exc.detail,
+        )
+        raise exc
+    except Exception as exc:
         db.rollback()
-        logger.exception("Unexpected error during atomic booking. Transaction rolled back.")
+        logger.exception(
+            "UNEXPECTED BOOKING ERROR: slot_id=%s, patient_id=%s",
+            slot_id,
+            current_user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="خطای داخلی سرور در فرآیند ثبت تراکنش نوبت",
-        )
+            detail="خطای داخلی سرور در فرآیند ثبت نوبت.",
+        ) from exc
 
 
 @router.get("/doctors/{doctor_id}/schedule", response_model=DoctorScheduleResponse)
