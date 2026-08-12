@@ -1,7 +1,5 @@
-# Path: app/api/routes/appointments.py
-
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -306,7 +304,31 @@ def execute_booking(
                 detail="برای این پزشک در این روز نوبت فعال دارید.",
             )
 
-        fee = Decimal(str(doctor.consultation_fee))
+        if doctor.user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="پروفایل کاربری پزشک کامل نیست.",
+            )
+
+        fee_raw = getattr(doctor, "consultation_fee", None)
+        if fee_raw is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="هزینه ویزیت این پزشک ثبت نشده است.",
+            )
+
+        try:
+            fee = Decimal(str(fee_raw))
+        except Exception as exc:
+            logger.exception(
+                "Invalid consultation_fee for doctor_id=%s fee_raw=%r",
+                doctor.id,
+                fee_raw,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="هزینه ویزیت پزشک نامعتبر است.",
+            ) from exc
 
         transaction = WalletService.transfer_fee(
             db=db,
