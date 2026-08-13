@@ -1,20 +1,24 @@
-# backend/app/api/routes/wallet.py
-import uuid
 from decimal import Decimal
 from datetime import datetime
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.user import User
+from app.models.wallet import TransactionStatus
 from app.services.wallet_service import WalletService
 
 router = APIRouter(prefix="/wallet", tags=["Wallet"])
 
 
+# =========================================================
 # Pydantic Schemas
+# =========================================================
+
 class DepositRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, description="مبلغ شارژ به تومان")
     description: Optional[str] = "شارژ کیف پول داک‌تایم"
@@ -24,9 +28,6 @@ class WalletResponse(BaseModel):
     balance: Decimal
     user_id: int
     wallet_id: int
-
-    class Config:
-        from_attributes = True
 
 
 class TransactionResponse(BaseModel):
@@ -56,88 +57,133 @@ class VerifyResponse(BaseModel):
     tracking_code: str
 
 
+# =========================================================
 # API Endpoints
+# =========================================================
+
 @router.get("/me", response_model=WalletResponse)
 def get_my_wallet(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """دریافت اطلاعات موجودی کیف پول کاربر"""
-    return WalletService.get_or_create_wallet(db=db, user_id=current_user.id)
+    """
+    دریافت اطلاعات موجودی کیف پول کاربر
+    """
+    wallet = WalletService.get_or_create_wallet(
+        db=db,
+        user_id=current_user.id,
+    )
+
+    return WalletResponse(
+        wallet_id=wallet.id,
+        user_id=wallet.user_id,
+        balance=wallet.balance,
+    )
 
 
 @router.post("/deposit", response_model=DepositResponse)
 def initiate_deposit(
-        payload: DepositRequest,
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+    payload: DepositRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """گام اول: ایجاد تراکنش و تولید لینک درگاه"""
+    """
+    گام اول: ایجاد تراکنش pending و تولید لینک درگاه آزمایشی
+    """
     try:
         transaction = WalletService.create_pending_deposit(
             db=db,
             user_id=current_user.id,
             amount=payload.amount,
-            description=payload.description
+            description=payload.description,
         )
 
-        mock_payment_url = f"https://sandbox.zarinpal.com/pg/StartPay/{transaction.tracking_code}"
+        mock_payment_url = (
+            f"https://sandbox.zarinpal.com/pg/StartPay/{transaction.tracking_code}"
+        )
 
         return DepositResponse(
             success=True,
             message="تراکنش با موفقیت ایجاد شد. در حال انتقال به درگاه...",
             payment_url=mock_payment_url,
-            authority=transaction.tracking_code
+            authority=transaction.tracking_code,
         )
-    except Exception as e:
-        print(f"CRITICAL ERROR in initiate_deposit: {str(e)}")
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(
+            f"CRITICAL ERROR in initiate_deposit | "
+            f"user_id={current_user.id} | amount={payload.amount} | error={exc}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="سیستم بانکی موقتاً در دسترس نیست."
-        )
+            detail="سیستم بانکی موقتاً در دسترس نیست.",
+        ) from exc
 
 
 @router.get("/verify", response_model=VerifyResponse)
 def verify_payment(
-        authority: str = Query(..., description="شناسه تراکنش برگشتی از بانک"),
-        status_bank: str = Query(..., alias="Status", description="وضعیت ارسالی از بانک"),
-        db: Session = Depends(get_db)
+    authority: str = Query(..., description="شناسه تراکنش برگشتی از بانک"),
+    status_bank: str = Query(
+        ...,
+        alias="Status",
+        description="وضعیت ارسالی از بانک",
+    ),
+    db: Session = Depends(get_db),
 ):
-    """گام دوم: تایید نهایی تراکنش"""
+    """
+    گام دوم: تایید نهایی تراکنش
+    """
     try:
-        is_success = (status_bank == "OK")
+        normalized_status = status_bank.strip().upper()
+        is_success = normalized_status == "OK"
+
         transaction = WalletService.verify_deposit(
             db=db,
             authority=authority,
-            is_bank_successful=is_success
+            is_bank_successful=is_success,
         )
 
-        if transaction.status == "SUCCESS":
+        if transaction.status == TransactionStatus.SUCCESS:
             return VerifyResponse(
                 success=True,
                 message="کیف پول با موفقیت شارژ شد.",
                 amount=transaction.amount,
-                tracking_code=transaction.tracking_code
+                tracking_code=transaction.tracking_code,
             )
 
         return VerifyResponse(
             success=False,
             message="تراکنش ناموفق بود یا قبلاً پردازش شده است.",
             amount=transaction.amount,
-            tracking_code=transaction.tracking_code
+            tracking_code=transaction.tracking_code,
         )
-    except ValueError as ve:
-        raise HTTPException(status_code=404, detail=str(ve))
-    except Exception as e:
-        print(f"VERIFY ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail="خطا در تایید تراکنش")
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(
+            f"VERIFY ERROR | authority={authority} | "
+            f"Status={status_bank} | error={exc}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="خطای داخلی هنگام تایید تراکنش",
+        ) from exc
 
 
 @router.get("/transactions", response_model=List[TransactionResponse])
 def get_my_transactions(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """دریافت تاریخچه تراکنش‌ها"""
-    return WalletService.get_wallet_history(db=db, user_id=current_user.id)
-
+    """
+    دریافت تاریخچه تراکنش‌های کیف پول کاربر
+    """
+    return WalletService.get_wallet_history(
+        db=db,
+        user_id=current_user.id,
+    )

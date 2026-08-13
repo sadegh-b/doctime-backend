@@ -77,3 +77,7 @@
 2026-08-09 16:34:51 | INFO | app.services.wallet_service | Refund requested: transaction_id=2 commit=False
 2026-08-09 16:34:51 | INFO | app.services.wallet_service | Refund processed (Flushed): transaction_id=2
 2026-08-09 16:34:51 | INFO | app.api.routes.appointments | Appointment cancelled atomically: appointment_id=1
+2026-08-13 16:06:05 | INFO | app.services.wallet_service | Pending deposit created: user_id=1 authority=DEP-D4E9573EBC0A
+2026-08-13 23:24:43 | INFO | app.services.wallet_service | Pending deposit created: user_id=1 authority=DEP-DF3198CDA9FA
+2026-08-13 23:27:41 | INFO | app.services.wallet_service | Pending deposit created: user_id=1 authority=DEP-520AB7BDFCE9
+2026-08-13 23:28:44 | INFO | app.services.wallet_service | Pending deposit created: user_id=1 authority=DEP-20BED7EFF962
