@@ -1,0 +1,14 @@
+﻿{
+  "name": "Dr Test",
+  "phone": "09123456789",
+  "email": "drtest@example.com",
+  "password": "123456",
+  "role": "doctor",
+  "specialty": "قلب",
+  "city": "تهران",
+  "work_shift": "morning",
+  "work_days": ["شنبه", "دوشنبه"],
+  "schedule_start_date": "1405/04/25",
+  "morning_start": "09:00",
+  "morning_end": "12:00"
+}
