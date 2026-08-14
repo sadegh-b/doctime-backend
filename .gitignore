@@ -1,13 +1,78 @@
-﻿__pycache__/
-*.pyc
+﻿# ─── Python ────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ─── Virtual environments & IDEs ───────────────
 .venv/
 venv/
+env/
+ENV/
+.idea/
+.vscode/
+
+# ─── Testing & coverage ────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+coverage.xml
+
+# ─── Database & local data ─────────────────────
 *.db
 *.sqlite3
+*.sqlite
+*.db-journal
+*.wal
+
+# ─── Environment & secrets ─────────────────────
 .env
+.env.*
+!.env.example
+
+# ─── Logs ──────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ─── Local result / manual test files ──────────
 result.json
 test_api_result.json
 wallet_test_result.json
 login_response.json
 topup.json
+doctor_login.json
+
+# ─── Local utility scripts ─────────────────────
+check_existing_user.py
 check_db.py
+create_spec.py
+read_fresh_otp.py
+read_otp.py
+read_spec.py
+register_doctor.py
+reset_doctor_password.py
+
+# ─── OS junk ───────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
