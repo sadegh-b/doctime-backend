@@ -55,7 +55,7 @@ def create_test_users(db_session: Session):
         user_id=doctor_user.id,
         specialty_id=specialty.id,
         consultation_fee=150000.00,  # ۱۵۰,۰۰۰ تومان
-        medical_council_number="123456",  # شماره نظام پزشکی پیش‌فرض
+        medical_council_number="654321",  # شماره نظام پزشکی یکتا برای جلوگیری از تداخل UNIQUE
         province="تهران",
         city="تهران",
         address="تهران، خیابان ولیعصر",

@@ -8,16 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.models.user import User
 from app.models.wallet import TransactionStatus
 from app.services.wallet_service import WalletService
+from app.services.payments import get_payment_gateway
 
 router = APIRouter(prefix="/wallet", tags=["Wallet"])
 
-
-# =========================================================
-# Pydantic Schemas
-# =========================================================
 
 class DepositRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, description="مبلغ شارژ به تومان")
@@ -57,18 +55,11 @@ class VerifyResponse(BaseModel):
     tracking_code: str
 
 
-# =========================================================
-# API Endpoints
-# =========================================================
-
 @router.get("/me", response_model=WalletResponse)
 def get_my_wallet(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    دریافت اطلاعات موجودی کیف پول کاربر
-    """
     wallet = WalletService.get_or_create_wallet(
         db=db,
         user_id=current_user.id,
@@ -87,9 +78,8 @@ def initiate_deposit(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    گام اول: ایجاد تراکنش pending و تولید لینک درگاه آزمایشی
-    """
+    transaction = None
+
     try:
         transaction = WalletService.create_pending_deposit(
             db=db,
@@ -98,21 +88,57 @@ def initiate_deposit(
             description=payload.description,
         )
 
-        mock_payment_url = (
-            f"https://sandbox.zarinpal.com/pg/StartPay/{transaction.tracking_code}"
+        gateway = get_payment_gateway()
+
+        # در ساختار فعلی سیستم، verify_deposit با authority ورودی
+        # روی Transaction.tracking_code جست‌وجو می‌کند.
+        # بنابراین authority واقعی بانک را بعد از پاسخ بانک
+        # داخل tracking_code ذخیره می‌کنیم.
+        callback_url = (
+            f"{settings.PAYMENT_CALLBACK_BASE_URL}/wallet/verify"
+            f"?authority={transaction.tracking_code}"
+            f"&Status=OK"
         )
+
+        payment_result = gateway.create_payment(
+            amount=int(transaction.amount),
+            order_id=str(transaction.id),
+            callback_url=callback_url,
+            additional_data=payload.description or "",
+            payer_id=str(current_user.id),
+        )
+
+        transaction.tracking_code = payment_result.authority
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
 
         return DepositResponse(
             success=True,
             message="تراکنش با موفقیت ایجاد شد. در حال انتقال به درگاه...",
-            payment_url=mock_payment_url,
-            authority=transaction.tracking_code,
+            payment_url=payment_result.payment_url,
+            authority=payment_result.authority,
         )
 
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        if transaction is not None:
+            try:
+                transaction.status = TransactionStatus.FAILED
+                db.add(transaction)
+                db.commit()
+            except Exception:
+                db.rollback()
+        raise exc
 
     except Exception as exc:
+        if transaction is not None:
+            try:
+                transaction.status = TransactionStatus.FAILED
+                db.add(transaction)
+                db.commit()
+            except Exception:
+                db.rollback()
+
         print(
             f"CRITICAL ERROR in initiate_deposit | "
             f"user_id={current_user.id} | amount={payload.amount} | error={exc}"
@@ -133,9 +159,6 @@ def verify_payment(
     ),
     db: Session = Depends(get_db),
 ):
-    """
-    گام دوم: تایید نهایی تراکنش
-    """
     try:
         normalized_status = status_bank.strip().upper()
         is_success = normalized_status == "OK"
@@ -180,9 +203,6 @@ def get_my_transactions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    دریافت تاریخچه تراکنش‌های کیف پول کاربر
-    """
     return WalletService.get_wallet_history(
         db=db,
         user_id=current_user.id,

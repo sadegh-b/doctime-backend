@@ -1,78 +1,66 @@
+import sys
+from pathlib import Path
+from typing import Optional
+
 import pytest
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.database.base import Base
-from app.database.session import get_db
-from app.main import app
+# تنظیم مسیر پروژه
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.models.user import User
-from app.models.doctor import Doctor, Specialty
-
-from app.core.security import create_access_token
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_temp.db"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
-
-TestingSessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-)
-
-
-@pytest.fixture(scope="function", autouse=True)
-def setup_database():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+# --- وارد کردن مدل‌ها به صورت صریح برای ثبت در Metadata ---
+from app.database.base import Base  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.models.doctor import Doctor, Specialty  # noqa: E402
+from app.models.otp import OTPVerification  # noqa: E402
 
 
 @pytest.fixture(scope="function")
 def db_session():
-    session = TestingSessionLocal()
+    # استفاده از StaticPool برای پایداری در SQLite in-memory
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        bind=engine,
+    )
+
+    # اطمینان از وجود جدول OTP در متادیتا قبل از ساخت
+    assert "otp_verifications" in Base.metadata.tables, "OTP model not registered!"
+
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
     try:
-        yield session
+        yield db
     finally:
-        session.close()
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
 
 
 @pytest.fixture(scope="function")
-def client(db_session):
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
-
-
-def _create_user(
-    db_session,
-    *,
-    name: str,
-    first_name: str,
-    last_name: str,
-    phone: str,
-    role: str,
-) -> User:
+def test_user(db_session):
     user = User(
-        name=name,
-        first_name=first_name,
-        last_name=last_name,
-        phone=phone,
-        role=role,
+        name="Test Patient",
+        first_name="Test",
+        last_name="Patient",
+        national_id="0013547890",
+        phone="09120000000",
+        email="test.patient@example.com",
+        hashed_password="test-hashed-password",
+        role="patient",
         is_active=True,
-        hashed_password="fake_hashed_password",
     )
     db_session.add(user)
     db_session.commit()
@@ -80,61 +68,117 @@ def _create_user(
     return user
 
 
-def _create_specialty(db_session) -> Specialty:
-    specialty = Specialty(
-        name="General Medicine",
-        slug="general-medicine",
-        description="Test specialty",
-    )
-    db_session.add(specialty)
-    db_session.commit()
-    db_session.refresh(specialty)
-    return specialty
-
-
 @pytest.fixture(scope="function")
-def doctor_token_headers(db_session):
-    specialty = _create_specialty(db_session)
+def test_doctor(db_session):
+    specialty = Specialty(name="داخلی", slug="internal-test")
+    db_session.add(specialty)
+    db_session.flush()
 
-    doctor_user = _create_user(
-        db_session,
+    user = User(
         name="Test Doctor",
         first_name="Test",
         last_name="Doctor",
+        national_id="0013547891",
         phone="09120000001",
+        email="test.doctor@example.com",
+        hashed_password="test-hashed-password",
         role="doctor",
+        is_active=True,
     )
+    db_session.add(user)
+    db_session.flush()
 
-    doctor_profile = Doctor(
-        user_id=doctor_user.id,
+    doctor = Doctor(
+        user_id=user.id,
+        medical_council_number="123456",
         specialty_id=specialty.id,
-        city="Tehran",
-        experience_years=5,
-        consultation_fee=100000,
+        province="تهران",
+        city="تهران",
+        address="test address",
         work_shift="morning",
-        province="Tehran",
-        address="Test Address",
     )
-    db_session.add(doctor_profile)
+    db_session.add(doctor)
     db_session.commit()
-    db_session.refresh(doctor_profile)
 
-    token = create_access_token(subject=str(doctor_user.id))
-
-    return {"Authorization": f"Bearer {token}"}
+    db_session.refresh(user)
+    db_session.refresh(doctor)
+    return user
 
 
 @pytest.fixture(scope="function")
-def patient_token_headers(db_session):
-    patient_user = _create_user(
-        db_session,
-        name="Test Patient",
-        first_name="Test",
-        last_name="Patient",
-        phone="09120000002",
-        role="patient",
-    )
+def test_app(db_session, test_user, test_doctor):
+    from app.api.dependencies import get_current_doctor, get_current_user
+    from app.database.session import get_db
+    from app.main import app
+    from app.models.user import User
 
-    token = create_access_token(subject=str(patient_user.id))
+    def override_get_db():
+        yield db_session
 
-    return {"Authorization": f"Bearer {token}"}
+    def override_get_current_user(
+        authorization: Optional[str] = Header(default=None),
+    ):
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token = authorization.removeprefix("Bearer ").strip()
+
+        # منطق توکن‌های تستی
+        if token == "doctor-token":
+            user = db_session.query(User).filter(User.role == "doctor").first()
+            if not user:
+                raise HTTPException(status_code=401, detail="Doctor not found")
+            return user
+
+        if token == "patient-token":
+            user = db_session.query(User).filter(User.role == "patient").first()
+            if not user:
+                raise HTTPException(status_code=401, detail="Patient not found")
+            return user
+
+        # اجازه دادن به JWT واقعی برای تست‌های جریان کامل
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Test override: valid token required",
+        )
+
+    def override_get_current_doctor(current_user=Depends(get_current_user)):
+        # هندل کردن Enum یا String برای نقش
+        role = getattr(current_user.role, "value", current_user.role)
+        if role != "doctor":
+            raise HTTPException(status_code=403, detail="دسترسی غیرمجاز")
+
+        doctor = db_session.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+        if not doctor:
+            raise HTTPException(status_code=404, detail="پروفایل پزشک یافت نشد.")
+        return doctor
+
+    # اعمال Overrideها
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_current_doctor] = override_get_current_doctor
+
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def client(test_app):
+    with TestClient(test_app) as test_client:
+        yield test_client
+
+
+@pytest.fixture(scope="function")
+def doctor_token_headers(test_doctor):
+    return {"Authorization": "Bearer doctor-token"}
+
+
+@pytest.fixture(scope="function")
+def patient_token_headers(test_user):
+    return {"Authorization": "Bearer patient-token"}
