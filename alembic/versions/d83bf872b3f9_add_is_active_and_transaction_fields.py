@@ -18,24 +18,32 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _get_existing_columns(table_name: str) -> set[str]:
+    """Return the existing column names for a database table."""
+    inspector = sa.inspect(op.get_bind())
+    return {column["name"] for column in inspector.get_columns(table_name)}
+
+
 def upgrade() -> None:
     """Upgrade schema."""
+    existing_columns = _get_existing_columns('wallets')
 
-    # در schema فعلی جدول درست wallets است، نه doctor_wallets
-    # و جدول transactions هم از قبل ساخته شده و این migration نباید
-    # روی doctor_wallet_transactions کار کند.
-    with op.batch_alter_table('wallets', schema=None) as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                'is_active',
-                sa.Boolean(),
-                nullable=False,
-                server_default=sa.true(),
+    if 'is_active' not in existing_columns:
+        with op.batch_alter_table('wallets', schema=None) as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    'is_active',
+                    sa.Boolean(),
+                    nullable=False,
+                    server_default=sa.true(),
+                )
             )
-        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    with op.batch_alter_table('wallets', schema=None) as batch_op:
-        batch_op.drop_column('is_active')
+    existing_columns = _get_existing_columns('wallets')
+
+    if 'is_active' in existing_columns:
+        with op.batch_alter_table('wallets', schema=None) as batch_op:
+            batch_op.drop_column('is_active')
