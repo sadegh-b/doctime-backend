@@ -8,7 +8,9 @@ from app.database.base import Base
 from app.database.session import engine
 from app.core.logging_config import setup_logging
 
-# تنظیم و پیکربندی سیستم لاگینگ متمرکز
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ allowed_origins = [
     "https://doctime-frontend.vercel.app",
     "https://doctime-frontend-git-main-sadegh-bs-projects.vercel.app",
     "https://doctime-frontend-6ieh9w4y0-sadegh-bs-projects.vercel.app",
+    "https://doctime-frontend-sadegh-bs-projects.vercel.app",
 ]
 
 frontend_url = getenv("FRONTEND_URL", "").strip().rstrip("/")
@@ -110,6 +113,7 @@ def on_startup():
     logger.info("Initializing database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("DocTime API started successfully.")
+    logger.info("Allowed CORS origins: %s", allowed_origins)
 
 @app.on_event("shutdown")
 def on_shutdown():
