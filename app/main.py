@@ -15,7 +15,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
-# Import database models before Base.metadata.create_all().
+# Import database models (for metadata / Alembic autogenerate)
 # -----------------------------------------------------------------------------
 from app.models.user import User  # noqa: F401
 from app.models.doctor import Doctor, Specialty  # noqa: F401
@@ -58,18 +58,20 @@ app = FastAPI(
 )
 
 # -----------------------------------------------------------------------------
-# CORS Configuration
+# CORS Configuration (Production-safe)
 # -----------------------------------------------------------------------------
 allowed_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://doctime-frontend-sadegh-bs-projects.vercel.app",
+    "https://doctime-frontend-bbzcqsquj-sadegh-bs-projects.vercel.app",
     "https://doctime-frontend-omega.vercel.app",
     "https://doctime-frontend.vercel.app",
     "https://doctime-frontend-git-main-sadegh-bs-projects.vercel.app",
     "https://doctime-frontend-6ieh9w4y0-sadegh-bs-projects.vercel.app",
-    "https://doctime-frontend-sadegh-bs-projects.vercel.app",
 ]
 
+# Add dynamic frontend URL from environment (Render)
 frontend_url = getenv("FRONTEND_URL", "").strip().rstrip("/")
 if frontend_url and frontend_url not in allowed_origins:
     allowed_origins.append(frontend_url)
@@ -78,8 +80,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 # -----------------------------------------------------------------------------
@@ -87,7 +91,11 @@ app.add_middleware(
 # -----------------------------------------------------------------------------
 @app.get("/", tags=["Health"])
 def root():
-    return {"status": "online", "message": "DocTime API is running", "version": "1.0.0"}
+    return {
+        "status": "online",
+        "message": "DocTime API is running",
+        "version": "1.0.0",
+    }
 
 @app.get("/health", tags=["Health"])
 def health_check():
@@ -110,8 +118,6 @@ app.include_router(doctor_wallet_router, prefix=API_PREFIX)
 # -----------------------------------------------------------------------------
 @app.on_event("startup")
 def on_startup():
-    logger.info("Initializing database tables...")
-    Base.metadata.create_all(bind=engine)
     logger.info("DocTime API started successfully.")
     logger.info("Allowed CORS origins: %s", allowed_origins)
 
