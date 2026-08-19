@@ -1,8 +1,9 @@
+# Path: app/services/payments/mellat.py
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
-from xml.etree import ElementTree as ET
 
 from fastapi import HTTPException, status
 
@@ -16,20 +17,30 @@ except Exception:  # pragma: no cover
 
 
 class MellatPaymentGateway(BasePaymentGateway):
+    """
+    سرویس درگاه پرداخت به پرداخت ملت با پشتیبانی از درخواست، تایید و تسویه تراکنش.
+    """
+
     def __init__(self) -> None:
         if Client is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="کتابخانه zeep نصب نیست",
+                detail="کتابخانه zeep برای اتصال به وب‌سرویس درگاه ملت نصب نیست",
             )
 
         if not settings.MELLAT_TERMINAL_ID or not settings.MELLAT_USERNAME or not settings.MELLAT_PASSWORD:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="تنظیمات درگاه ملت کامل نیست",
+                detail="تنظیمات احراز هویت درگاه ملت (TerminalID/Username/Password) کامل نیست",
             )
 
-        self.client = Client(settings.MELLAT_OPERATIONAL_WSDL)
+        try:
+            self.client = Client(settings.MELLAT_OPERATIONAL_WSDL)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="امکان اتصال به WSDL درگاه پرداخت ملت وجود ندارد",
+            ) from exc
 
     def create_payment(
         self,
@@ -39,30 +50,36 @@ class MellatPaymentGateway(BasePaymentGateway):
         additional_data: str | None = None,
         payer_id: str | None = None,
     ) -> PaymentInitResult:
+        """
+        ارسال درخواست اولیه به درگاه ملت (bpPayRequest) جهت دریافت RefId / Authority.
+        """
+        now = datetime.now()
+        local_date = now.strftime("%Y%m%d")
+        local_time = now.strftime("%H%M%S")
+
         try:
             result = self.client.service.bpPayRequest(
-                terminalId=settings.MELLAT_TERMINAL_ID,
+                terminalId=int(settings.MELLAT_TERMINAL_ID),
                 userName=settings.MELLAT_USERNAME,
                 userPassword=settings.MELLAT_PASSWORD,
-                orderId=order_id,
-                amount=amount,
-                localDate=None,
-                localTime=None,
+                orderId=int(order_id),
+                amount=int(amount),
+                localDate=local_date,
+                localTime=local_time,
                 additionalData=additional_data or "",
                 callBackUrl=callback_url,
-                payerId=payer_id or "",
+                payerId=payer_id or "0",
             )
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="خطا در ارتباط با درگاه ملت",
+                detail=f"خطا در برقراری ارتباط با وب‌سرویس درگاه ملت: {str(exc)}",
             ) from exc
 
-        # Mellat returns: "0,AUTHCODE"
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="پاسخ نامعتبر از درگاه ملت",
+                detail="پاسخ نامعتبر یا خالی از درگاه ملت دریافت شد",
             )
 
         if isinstance(result, str):
@@ -70,24 +87,24 @@ class MellatPaymentGateway(BasePaymentGateway):
             if len(parts) != 2:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="فرمت پاسخ درگاه ملت نامعتبر است",
+                    detail=f"فرمت پاسخ دریافتی از درگاه ملت نامعتبر است: {result}",
                 )
 
             response_code, reference = parts
             if response_code != "0":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"خطا از درگاه ملت: {response_code}",
+                    detail=f"خطای پرداخت از سمت درگاه ملت. کد خطا: {response_code}",
                 )
 
             return PaymentInitResult(
                 authority=reference,
-                payment_url=f"{settings.MELLAT_STARTPAY_URL}/{reference}",
+                payment_url=f"{settings.MELLAT_STARTPAY_URL}",
             )
 
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="نوع پاسخ درگاه ملت نامعتبر است",
+            detail="نوع داده خروجی از درگاه ملت پشتیبانی نمی‌شود",
         )
 
     def verify_payment(
@@ -96,19 +113,52 @@ class MellatPaymentGateway(BasePaymentGateway):
         sale_order_id: str,
         sale_reference_id: str,
     ) -> bool:
+        """
+        تایید تراکنش پرداخت شده (bpVerifyRequest).
+        کد 0 به معنای تایید موفق تراکنش است.
+        """
         try:
             result = self.client.service.bpVerifyRequest(
-                terminalId=settings.MELLAT_TERMINAL_ID,
+                terminalId=int(settings.MELLAT_TERMINAL_ID),
                 userName=settings.MELLAT_USERNAME,
                 userPassword=settings.MELLAT_PASSWORD,
-                orderId=order_id,
-                saleOrderId=sale_order_id,
-                saleReferenceId=sale_reference_id,
+                orderId=int(order_id),
+                saleOrderId=int(sale_order_id),
+                saleReferenceId=int(sale_reference_id),
             )
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="خطا در تایید تراکنش از درگاه ملت",
+                detail="خطا در فراخوانی سرویس تایید تراکنش درگاه ملت",
             ) from exc
 
         return str(result).strip() == "0"
+
+    def settle_payment(
+        self,
+        order_id: str,
+        sale_order_id: str,
+        sale_reference_id: str,
+    ) -> bool:
+        """
+        تسویه و واریز قطعی مبلغ به حساب (bpSettleRequest).
+        کد 0: تسویه موفق
+        کد 45: تراکنش قبلاً با موفقیت تسویه شده است (Idempotent)
+        """
+        try:
+            result = self.client.service.bpSettleRequest(
+                terminalId=int(settings.MELLAT_TERMINAL_ID),
+                userName=settings.MELLAT_USERNAME,
+                userPassword=settings.MELLAT_PASSWORD,
+                orderId=int(order_id),
+                saleOrderId=int(sale_order_id),
+                saleReferenceId=int(sale_reference_id),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="خطا در فراخوانی سرویس تسویه تراکنش درگاه ملت",
+            ) from exc
+
+        res_str = str(result).strip()
+        return res_str in ("0", "45")

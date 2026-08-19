@@ -1,3 +1,5 @@
+# Path: app/models/doctor_wallet.py
+
 from datetime import datetime
 from decimal import Decimal
 
@@ -10,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -71,9 +74,24 @@ class DoctorWallet(Base):
         cascade="all, delete-orphan",
     )
 
+    def __repr__(self) -> str:
+        return (
+            f"<DoctorWallet id={self.id} "
+            f"doctor_id={self.doctor_id} "
+            f"balance={self.balance}>"
+        )
+
 
 class DoctorWalletTransaction(Base):
     __tablename__ = "doctor_wallet_transactions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "wallet_id",
+            "reference_id",
+            name="uq_doctor_wallet_transaction_wallet_reference",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -94,6 +112,8 @@ class DoctorWalletTransaction(Base):
         nullable=False,
     )
 
+    # شناسه یکتای درخواست مالی یا شناسه تأیید درگاه
+    # برای عملیات دستی می‌تواند None باشد.
     reference_id = Column(
         String(255),
         nullable=True,
@@ -115,3 +135,12 @@ class DoctorWalletTransaction(Base):
         "DoctorWallet",
         back_populates="transactions",
     )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DoctorWalletTransaction id={self.id} "
+            f"wallet_id={self.wallet_id} "
+            f"type={self.transaction_type} "
+            f"amount={self.amount} "
+            f"reference_id={self.reference_id}>"
+        )

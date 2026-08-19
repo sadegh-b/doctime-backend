@@ -29,7 +29,9 @@ class DoctorSubscription(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # روابط برای دسترسی آسان‌تر
     plan = relationship("SubscriptionPlan", back_populates="doctor_subscriptions")
+    # doctor = relationship("Doctor", back_populates="subscriptions") # فرض بر اینکه در مدل Doctor تعریف شده
 
 
 class PromotionPackage(Base):
@@ -44,6 +46,8 @@ class PromotionPackage(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    doctor_promotions = relationship("DoctorPromotion", back_populates="package")
+
 
 class DoctorPromotion(Base):
     __tablename__ = "doctor_promotions"
@@ -55,3 +59,6 @@ class DoctorPromotion(Base):
     ends_at = Column(DateTime, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # رابطه کامل
+    package = relationship("PromotionPackage", back_populates="doctor_promotions")

@@ -1,11 +1,11 @@
-# Path: app/models/wallet.py
+from __future__ import annotations
 
-from datetime import datetime, timezone
 import enum
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Enum
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -44,18 +44,21 @@ class Wallet(Base):
         Numeric(precision=12, scale=2),
         nullable=False,
         default=Decimal("0.00"),
+        server_default="0",
     )
 
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
+        server_default="true",
     )
 
     is_locked: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
+        server_default="false",
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -120,13 +123,13 @@ class Transaction(Base):
     )
 
     transaction_type: Mapped[TransactionType] = mapped_column(
-        Enum(TransactionType),
+        Enum(TransactionType, name="transaction_type_enum"),
         nullable=False,
         default=TransactionType.DEPOSIT,
     )
 
     status: Mapped[TransactionStatus] = mapped_column(
-        Enum(TransactionStatus),
+        Enum(TransactionStatus, name="transaction_status_enum"),
         nullable=False,
         default=TransactionStatus.PENDING,
     )
@@ -166,9 +169,7 @@ class Transaction(Base):
         back_populates="received_transactions",
     )
 
-    appointment = relationship(
-        "Appointment",
-    )
+    appointment = relationship("Appointment")
 
     def __repr__(self) -> str:
         return (

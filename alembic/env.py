@@ -13,13 +13,24 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.database.base import Base
-from app.models.appointment import Appointment  # noqa: F401
+
+# Core models
+from app.models.user import User  # noqa: F401
+from app.models.doctor import Doctor, Specialty  # noqa: F401
 from app.models.availability import Availability  # noqa: F401
 from app.models.consultation import ConsultationRequest  # noqa: F401
-from app.models.doctor import Doctor, Specialty  # noqa: F401
 from app.models.otp import OTPVerification  # noqa: F401
-from app.models.user import User  # noqa: F401
-from app.models.wallet import Transaction, Wallet  # noqa: F401
+from app.models.appointment import Appointment  # noqa: F401
+from app.models.wallet import Wallet, Transaction  # noqa: F401
+
+# Doctor billing / finance models
+from app.models.doctor_wallet import DoctorWallet, DoctorWalletTransaction  # noqa: F401
+from app.models.doctor_billing import (  # noqa: F401
+    SubscriptionPlan,
+    DoctorSubscription,
+    PromotionPackage,
+    DoctorPromotion,
+)
 
 config = context.config
 
