@@ -1,197 +1,182 @@
-import axios from "axios";
-import api from "./api";
+# app/services/auth_service.py
 
-export type UserRole = "patient" | "doctor" | "admin";
-export type WorkShift = "morning" | "afternoon" | "both";
+from __future__ import annotations
 
-export interface RegisterPayload {
-  name: string;
-  phone: string;
-  email?: string;
-  password: string;
-  role?: "patient" | "doctor";
-  specialty?: string;
-  city?: string;
-  work_shift?: WorkShift;
-  work_days?: string[];
-  schedule_start_date?: string;
-  morning_start?: string;
-  morning_end?: string;
-  afternoon_start?: string;
-  afternoon_end?: string;
-}
+from typing import Optional
 
-export interface LoginPayload {
-  phone: string;
-  password: string;
-}
+from sqlalchemy.orm import Session
 
-export interface AuthUser {
-  id: number;
-  name: string;
-  phone: string;
-  email?: string | null;
-  role: UserRole;
-  is_active?: boolean;
-  specialty?: string | null;
-  city?: string | null;
-  work_shift?: WorkShift | null;
-}
+from app.core.security import create_access_token, get_password_hash, verify_password
+from app.models.user import User, UserRole
 
-export interface AuthResponse {
-  access_token: string;
-  token_type: string;
-  user: AuthUser;
-}
 
-const ACCESS_TOKEN_KEY = "access_token";
-const ROLE_KEY = "role";
+def get_user_by_id(db: Session, user_id: int) -> Optional[User]:
+    """
+    دریافت کاربر براساس شناسه.
 
-function setAccessToken(token: string) {
-  localStorage.setItem(ACCESS_TOKEN_KEY, token);
-}
+    Args:
+        db: نشست دیتابیس SQLAlchemy
+        user_id: شناسه کاربر
 
-export function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_TOKEN_KEY);
-}
+    Returns:
+        User | None
+    """
+    return db.query(User).filter(User.id == user_id).first()
 
-function removeAccessToken() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-}
 
-function setRole(role: UserRole) {
-  localStorage.setItem(ROLE_KEY, role);
-}
+def get_user_by_phone(db: Session, phone: str) -> Optional[User]:
+    """
+    دریافت کاربر براساس شماره موبایل.
 
-export function getRole(): UserRole | null {
-  const role = localStorage.getItem(ROLE_KEY);
+    شماره موبایل باید پیش از فراخوانی، توسط schema یا route نرمال‌سازی شده باشد.
 
-  if (role === "patient" || role === "doctor" || role === "admin") {
-    return role;
-  }
+    Args:
+        db: نشست دیتابیس SQLAlchemy
+        phone: شماره موبایل کاربر
 
-  return null;
-}
+    Returns:
+        User | None
+    """
+    normalized_phone = phone.strip()
 
-function removeRole() {
-  localStorage.removeItem(ROLE_KEY);
-}
+    return db.query(User).filter(User.phone == normalized_phone).first()
 
-export function isAuthenticated(): boolean {
-  return Boolean(getAccessToken());
-}
 
-function extractErrorMessage(error: unknown, fallback: string): string {
-  if (!axios.isAxiosError(error)) {
-    return fallback;
-  }
+def is_phone_registered(db: Session, phone: str) -> bool:
+    """
+    بررسی می‌کند شماره موبایل قبلاً ثبت‌نام شده است یا نه.
+    """
+    return get_user_by_phone(db, phone) is not None
 
-  const detail = error.response?.data?.detail;
-  const message = error.response?.data?.message;
 
-  if (typeof detail === "string" && detail.trim()) {
-    return detail;
-  }
+def create_user(
+    db: Session,
+    *,
+    phone: str,
+    password: str,
+    first_name: str,
+    last_name: str,
+    role: UserRole = UserRole.PATIENT,
+    is_active: bool = True,
+) -> User:
+    """
+    ایجاد کاربر جدید.
 
-  if (Array.isArray(detail) && detail.length > 0) {
-    const firstItem = detail[0];
-    if (
-      firstItem &&
-      typeof firstItem === "object" &&
-      "msg" in firstItem &&
-      typeof firstItem.msg === "string" &&
-      firstItem.msg.trim()
-    ) {
-      return firstItem.msg;
-    }
-  }
+    هش کردن رمز عبور فقط در بک‌اند انجام می‌شود.
+    هرگز password خام را در دیتابیس ذخیره نکن.
 
-  if (typeof message === "string" && message.trim()) {
-    return message;
-  }
+    Raises:
+        ValueError: اگر شماره موبایل یا اطلاعات ضروری نامعتبر باشد.
+    """
+    normalized_phone = phone.strip()
+    normalized_first_name = first_name.strip()
+    normalized_last_name = last_name.strip()
 
-  if (error.response?.status === 401) {
-    return "شماره موبایل یا رمز عبور اشتباه است.";
-  }
+    if not normalized_phone:
+        raise ValueError("شماره موبایل الزامی است.")
 
-  if (error.response?.status === 422) {
-    return "اطلاعات واردشده صحیح نیست.";
-  }
+    if not password or not password.strip():
+        raise ValueError("رمز عبور الزامی است.")
 
-  return fallback;
-}
+    if not normalized_first_name:
+        raise ValueError("نام الزامی است.")
 
-export async function register(payload: RegisterPayload): Promise<AuthResponse> {
-  try {
-    const normalizedPayload = {
-      name: payload.name.trim(),
-      phone: payload.phone.trim(),
-      password: payload.password.trim(),
-      email: payload.email?.trim() || null,
-      role: payload.role ?? "patient",
+    if not normalized_last_name:
+        raise ValueError("نام خانوادگی الزامی است.")
 
-      specialty: payload.specialty?.trim() || null,
-      city: payload.city?.trim() || null,
-      work_shift: payload.work_shift ?? null,
-      work_days: payload.work_days?.length ? payload.work_days : null,
-      schedule_start_date: payload.schedule_start_date?.trim() || null,
-      morning_start: payload.morning_start?.trim() || null,
-      morning_end: payload.morning_end?.trim() || null,
-      afternoon_start: payload.afternoon_start?.trim() || null,
-      afternoon_end: payload.afternoon_end?.trim() || null,
-    };
+    if is_phone_registered(db, normalized_phone):
+        raise ValueError("این شماره موبایل قبلاً ثبت‌نام شده است.")
 
-    const response = await api.post<AuthResponse>("/auth/register", normalizedPayload);
-    const data = response.data;
+    user = User(
+        phone=normalized_phone,
+        first_name=normalized_first_name,
+        last_name=normalized_last_name,
+        hashed_password=get_password_hash(password),
+        role=role,
+        is_active=is_active,
+    )
 
-    if (data.access_token) {
-      setAccessToken(data.access_token);
-    }
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-    if (data.user?.role) {
-      setRole(data.user.role);
-    }
+    return user
 
-    window.dispatchEvent(new Event("auth-change"));
-    return data;
-  } catch (error: unknown) {
-    throw new Error(extractErrorMessage(error, "خطا در ثبت‌نام"));
-  }
-}
 
-export async function login(payload: LoginPayload): Promise<AuthResponse> {
-  try {
-    const response = await api.post<AuthResponse>("/auth/login", {
-      phone: payload.phone.trim(),
-      password: payload.password.trim(),
-    });
+def authenticate_user(
+    db: Session,
+    *,
+    phone: str,
+    password: str,
+) -> Optional[User]:
+    """
+    اعتبارسنجی شماره موبایل و رمز عبور.
 
-    const data = response.data;
+    برای امنیت، در صورت نامعتبر بودن شماره یا رمز، هر دو حالت None برمی‌گردانند
+    تا مشخص نشود شماره موبایل در سیستم وجود دارد یا خیر.
 
-    if (data.access_token) {
-      setAccessToken(data.access_token);
-    }
+    Returns:
+        User | None
+    """
+    user = get_user_by_phone(db, phone)
 
-    if (data.user?.role) {
-      setRole(data.user.role);
-    }
+    if user is None:
+        return None
 
-    window.dispatchEvent(new Event("auth-change"));
-    return data;
-  } catch (error: unknown) {
-    throw new Error(extractErrorMessage(error, "خطا در ورود"));
-  }
-}
+    if not user.is_active:
+        return None
 
-export async function getMe(): Promise<AuthUser> {
-  const response = await api.get<AuthUser>("/auth/me");
-  return response.data;
-}
+    if not verify_password(password, user.hashed_password):
+        return None
 
-export function logout() {
-  removeAccessToken();
-  removeRole();
-  localStorage.removeItem("refresh_token");
-  localStorage.removeItem("token");
-  window.dispatchEvent(new Event("auth-change"));
-}
+    return user
+
+
+def create_user_access_token(user: User) -> str:
+    """
+    ساخت JWT برای کاربر معتبر.
+
+    payload شامل:
+    - sub: شناسه کاربر
+    - role: نقش کاربر
+    - phone: شماره موبایل
+
+    توجه:
+    هیچ اطلاعات حساسی مانند رمز عبور یا hashed_password
+    نباید داخل JWT قرار گیرد.
+    """
+    return create_access_token(
+        data={
+            "sub": str(user.id),
+            "role": user.role.value,
+            "phone": user.phone,
+        }
+    )
+
+
+def authenticate_and_create_token(
+    db: Session,
+    *,
+    phone: str,
+    password: str,
+) -> tuple[Optional[User], Optional[str]]:
+    """
+    ورود کاربر و ساخت توکن.
+
+    Returns:
+        tuple[User | None, str | None]:
+            - در ورود موفق: (user, access_token)
+            - در ورود ناموفق: (None, None)
+    """
+    user = authenticate_user(
+        db,
+        phone=phone,
+        password=password,
+    )
+
+    if user is None:
+        return None, None
+
+    access_token = create_user_access_token(user)
+
+    return user, access_token
